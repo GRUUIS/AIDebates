@@ -12,6 +12,12 @@ interface DebateRequestBody {
   evidence?: EvidenceCard[];
 }
 
+interface TavilyResult {
+  title?: string;
+  url?: string;
+  content?: string;
+}
+
 const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
 const responseSchema = {
@@ -66,6 +72,61 @@ function buildSession(body: DebateRequestBody | null): DebateSession {
   };
 }
 
+function detectSourceType(url: string): EvidenceCard["type"] {
+  const lower = url.toLowerCase();
+
+  if (lower.includes("arxiv") || lower.endsWith(".pdf") || lower.includes("scholar")) {
+    return "paper";
+  }
+
+  if (lower.includes("youtube") || lower.includes("youtu.be")) {
+    return "video";
+  }
+
+  return "article";
+}
+
+async function fetchEvidence(topic: string, userMessage?: string): Promise<EvidenceCard[]> {
+  if (!process.env.SEARCH_API_KEY) {
+    return [];
+  }
+
+  const query = `${topic}${userMessage ? ` ${userMessage}` : ""} ethics debate evidence`;
+  const response = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.SEARCH_API_KEY}`
+    },
+    body: JSON.stringify({
+      query,
+      topic: "general",
+      search_depth: "basic",
+      max_results: 3,
+      include_answer: false,
+      include_images: false,
+      include_domains: [".edu"]
+    })
+  });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = (await response.json()) as { results?: TavilyResult[] };
+
+  return (payload.results ?? [])
+    .filter((item) => item.url && item.title)
+    .map((item, index) => ({
+      id: `live-${index + 1}`,
+      title: item.title ?? `Source ${index + 1}`,
+      type: detectSourceType(item.url ?? ""),
+      summary: (item.content ?? "Retrieved external evidence for the current debate topic.").slice(0, 280),
+      url: item.url ?? "",
+      usedBy: "Research layer"
+    }));
+}
+
 function buildDebateInput(session: DebateSession): string {
   const transcript = session.messages
     .map((message) => `Turn ${message.turn} | ${message.speaker} (${message.role}): ${message.content}`)
@@ -112,6 +173,7 @@ async function generateDebateResponse(session: DebateSession): Promise<DebateRes
       "You must select one next speaker from the provided agent ids.",
       "When writing the draft message, fully embody the chosen agent's moral lens, stance, and style.",
       "Keep the draft message under 140 words and make it directly responsive to the latest turn.",
+      "If external evidence is available, make use of it naturally without inventing citations.",
       "Use only the JSON schema requested in text.format.",
       "Agent prompt pack:",
       agentPromptPack
@@ -145,18 +207,39 @@ async function generateDebateResponse(session: DebateSession): Promise<DebateRes
       turn: session.messages.length + 1,
       content: parsed.draftMessage
     },
-    suggestedEvidence: session.evidence.slice(0, 2)
+    suggestedEvidence: session.evidence.slice(0, 3)
   };
 }
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as DebateRequestBody | null;
   const session = buildSession(body);
-  const response = await generateDebateResponse(session);
 
-  return Response.json({
-    ...response,
-    model: process.env.OPENAI_API_KEY ? MODEL : "mock-fallback",
-    usedLiveModel: Boolean(process.env.OPENAI_API_KEY)
-  });
+  const liveEvidence = await fetchEvidence(session.topic, body?.userMessage);
+  const sessionWithEvidence = {
+    ...session,
+    evidence: liveEvidence.length > 0 ? liveEvidence : session.evidence
+  };
+
+  try {
+    const response = await generateDebateResponse(sessionWithEvidence);
+
+    return Response.json({
+      ...response,
+      model: process.env.OPENAI_API_KEY ? MODEL : "mock-fallback",
+      usedLiveModel: Boolean(process.env.OPENAI_API_KEY),
+      usedLiveSearch: liveEvidence.length > 0
+    });
+  } catch (error) {
+    const fallback = createMockDebateResponse(sessionWithEvidence);
+
+    return Response.json({
+      ...fallback,
+      suggestedEvidence: sessionWithEvidence.evidence,
+      model: "mock-fallback",
+      usedLiveModel: false,
+      usedLiveSearch: liveEvidence.length > 0,
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 }
