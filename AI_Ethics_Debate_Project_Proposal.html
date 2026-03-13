@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ethics Arena Final Project Proposal</title>
+  <style>
+    :root {
+      --text: #1f2937;
+      --muted: #4b5563;
+      --line: #d1d5db;
+      --accent: #0f766e;
+      --bg: #f6f5f1;
+      --card: #fffdf8;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Georgia", "Times New Roman", "Microsoft YaHei", serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top right, rgba(15, 118, 110, 0.12), transparent 24%),
+        linear-gradient(180deg, #f7f5ef 0%, #efebe2 100%);
+      line-height: 1.5;
+    }
+
+    .page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 18mm 16mm 18mm;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(255, 255, 255, 0.82));
+      border: 1px solid rgba(15, 118, 110, 0.18);
+      border-radius: 18px;
+      padding: 20px 22px;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.15;
+      color: #134e4a;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .meta {
+      margin-top: 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    h2 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+      color: #115e59;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+    }
+
+    h3 {
+      margin: 14px 0 6px;
+      font-size: 15px;
+      color: #134e4a;
+    }
+
+    p {
+      margin: 7px 0;
+      font-size: 12px;
+    }
+
+    ul, ol {
+      margin: 6px 0 8px 18px;
+      padding: 0;
+      font-size: 12px;
+    }
+
+    li {
+      margin: 3px 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .card {
+      background: rgba(255, 253, 248, 0.92);
+      border: 1px solid #d6d3d1;
+      border-radius: 12px;
+      padding: 12px;
+      break-inside: avoid;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .footer {
+      margin-top: 20px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: right;
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      .page {
+        margin: 0;
+        padding: 14mm 14mm 14mm;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <h1>Ethics Arena</h1>
+      <p class="subtitle">Final Project Proposal: A Multi-Agent AI Debate Chatroom for Moral and Ethical Dilemmas</p>
+      <p class="meta">Prepared for the AI Tools final project. This proposal focuses on feasibility, architecture, page planning, and a realistic milestone path.</p>
+    </section>
+
+    <h2>1. Overview</h2>
+    <p>Ethics Arena is an interactive chatroom where multiple AI agents debate moral and ethical questions from different philosophical and social perspectives. Each agent acts as a distinct person with a stable identity, values, and speaking style. A human user can join the same discussion, challenge claims, ask follow-up questions, or request additional evidence.</p>
+    <p>The core idea is to move beyond a single-answer chatbot. Instead of producing one blended response, the system presents structured disagreement, sourced argumentation, and moderated discussion around difficult ethical issues.</p>
+
+    <h2>2. Problem And Motivation</h2>
+    <p>Ethical questions rarely have one universally accepted answer. Topics such as privacy, autonomous weapons, euthanasia, free speech, AI bias, and punishment are shaped by competing value systems. A standard chatbot often compresses disagreement into one summary, which hides the tension that makes these questions interesting.</p>
+    <p>This project addresses that gap by building a multi-agent debate environment that can represent several moral lenses at once while grounding claims in retrieved sources.</p>
+
+    <h2>3. Objectives</h2>
+    <ul>
+      <li>Build a chatroom-style product with multiple AI debate agents.</li>
+      <li>Give each agent a stable role, ethical framework, and conversational style.</li>
+      <li>Enable source-backed argumentation through external retrieval.</li>
+      <li>Allow the user to actively intervene in the discussion.</li>
+      <li>Generate clear summaries of agreements, disagreements, and unresolved tensions.</li>
+    </ul>
+
+    <h2>4. Core Features</h2>
+    <div class="grid">
+      <section class="card">
+        <h3>Multi-Agent Debate</h3>
+        <p>Example agents include a utilitarian thinker, a deontological thinker, a virtue ethics thinker, a pragmatic policy analyst, and a moderator.</p>
+      </section>
+      <section class="card">
+        <h3>Structured Turn Flow</h3>
+        <p>Opening statements, evidence retrieval, rebuttals, user intervention, and a final moderator summary keep the debate organized.</p>
+      </section>
+      <section class="card">
+        <h3>Retrieval-Augmented Reasoning</h3>
+        <p>Agents can draw on papers, analyses, public case studies, and selected media references instead of relying only on model memory.</p>
+      </section>
+      <section class="card">
+        <h3>User Participation</h3>
+        <p>The user can question an agent, request evidence, challenge assumptions, or redirect the topic during the discussion.</p>
+      </section>
+    </div>
+
+    <h2>5. Feasibility</h2>
+    <h3>Why This Is Realistic</h3>
+    <ul>
+      <li>Multi-agent behavior can be orchestrated with one LLM backend plus strong role prompts.</li>
+      <li>Search APIs can supply articles and paper metadata without building a crawler.</li>
+      <li>A chatroom interface is straightforward with common web tooling.</li>
+      <li>The main academic value is in orchestration, role design, evidence control, and interaction design.</li>
+    </ul>
+    <h3>Main Risks</h3>
+    <ul>
+      <li>Agents may sound too similar if role prompts are weak.</li>
+      <li>Low-quality sources can reduce argument quality.</li>
+      <li>Without turn control, debates can become repetitive.</li>
+      <li>Some ethics topics require moderation and safety limits.</li>
+      <li>Latency and API cost increase as more agents and tools are added.</li>
+    </ul>
+    <h3>Scope Strategy</h3>
+    <p>The project should begin with an MVP: three debate agents, one moderator, text-first chat, article or paper retrieval, structured turns, and source cards. Video and image support can be treated as stretch goals.</p>
+
+    <h2>6. Technical Architecture</h2>
+    <div class="grid">
+      <section class="card">
+        <h3>Frontend</h3>
+        <ul>
+          <li>Next.js or React</li>
+          <li>Chatroom layout</li>
+          <li>Evidence card panel</li>
+          <li>User input and control buttons</li>
+        </ul>
+      </section>
+      <section class="card">
+        <h3>Backend</h3>
+        <ul>
+          <li>Node.js or Next API routes</li>
+          <li>OpenAI API for debate generation</li>
+          <li>Search API integration for retrieval</li>
+          <li>Session orchestration logic</li>
+        </ul>
+      </section>
+      <section class="card">
+        <h3>State And Memory</h3>
+        <ul>
+          <li>Current topic</li>
+          <li>Agent roles and stance definitions</li>
+          <li>Turn history</li>
+          <li>Used citations and user interventions</li>
+        </ul>
+      </section>
+      <section class="card">
+        <h3>Safety Layer</h3>
+        <ul>
+          <li>Risky-topic detection</li>
+          <li>Moderation rules</li>
+          <li>Safer fallback responses</li>
+          <li>Constraint checks on outputs</li>
+        </ul>
+      </section>
+    </div>
+
+    <h3>Suggested Stack</h3>
+    <ul>
+      <li>Frontend: Next.js, React, Tailwind CSS or custom CSS</li>
+      <li>Backend: Next API routes or Express</li>
+      <li>AI: OpenAI API</li>
+      <li>Retrieval: Tavily, SerpAPI, or Bing Search API</li>
+      <li>Storage: SQLite during development</li>
+      <li>Optional extensions: Semantic Scholar, Crossref, YouTube Data API</li>
+    </ul>
+
+    <h2>7. Page Plan</h2>
+    <h3>Home / Topic Setup</h3>
+    <ul>
+      <li>Enter a debate topic</li>
+      <li>Select debate mode or topic category</li>
+      <li>Choose default agent roles</li>
+      <li>Start a session</li>
+    </ul>
+    <h3>Debate Room</h3>
+    <ul>
+      <li>Live multi-agent conversation timeline</li>
+      <li>Participant list with role labels</li>
+      <li>User input box</li>
+      <li>Controls for summarize, rebut, or request evidence</li>
+    </ul>
+    <h3>Source Panel</h3>
+    <ul>
+      <li>Title, source type, short summary, and link</li>
+      <li>Visible connection between sources and agent claims</li>
+    </ul>
+    <h3>Summary View</h3>
+    <ul>
+      <li>Strongest arguments by each side</li>
+      <li>Agreements and disagreements</li>
+      <li>Source list and final reflection</li>
+    </ul>
+
+    <h2>8. Development Milestones</h2>
+    <ol>
+      <li>Project setup and basic topic/chat UI.</li>
+      <li>Moderator-driven multi-agent debate engine.</li>
+      <li>Search and retrieval integration with evidence cards.</li>
+      <li>User participation and session memory.</li>
+      <li>Safety checks, final summaries, and UI polish.</li>
+      <li>Testing, screenshots, and final demo preparation.</li>
+    </ol>
+
+    <h2>9. Evaluation</h2>
+    <p>The project can be evaluated by role distinctiveness, argument quality, evidence grounding, user participation quality, and conversation stability across multiple turns. A final class demo can show several ethics topics and compare debate quality with and without retrieval support.</p>
+
+    <h2>10. Expected Outcome</h2>
+    <p>The expected result is a working prototype that demonstrates multi-agent orchestration, retrieval-augmented reasoning, and an interactive debate experience around ethical dilemmas. A well-scoped MVP with strong role identity and reliable citation behavior would already make a compelling final project.</p>
+
+    <div class="footer">Ethics Arena Proposal | Generated on 2026-03-13</div>
+  </main>
+</body>
+</html>
