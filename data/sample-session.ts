@@ -1,4 +1,4 @@
-import { defaultAgents } from "@/data/agents";
+﻿import { defaultAgents } from "@/data/agents";
 import type { DebateSession } from "@/types/debate";
 
 export const sampleSession: DebateSession = {
@@ -44,22 +44,6 @@ export const sampleSession: DebateSession = {
         "What if the human commander still authorizes the mission but the model only handles last-second targeting faster than a person could?"
     }
   ],
-  evidence: [
-    {
-      id: "e1",
-      title: "Autonomous Weapon Systems and Human Control",
-      type: "paper",
-      summary: "Discusses meaningful human control as a core legal and ethical requirement in lethal decision pipelines.",
-      url: "https://example.org/meaningful-human-control",
-      usedBy: "Jonah"
-    },
-    {
-      id: "e2",
-      title: "Civilian Harm and Decision Latency in Defensive Operations",
-      type: "article",
-      summary: "Argues that faster response systems can reduce friendly and civilian casualties in narrowly defined defensive contexts.",
-      url: "https://example.org/decision-latency",
-      usedBy: "Mira"
-    }
-  ]
+  evidence: []
 };
+

@@ -7,7 +7,7 @@ A multi-agent AI debate chatroom prototype for moral and ethical dilemmas.
 - Next.js
 - React
 - TypeScript
-- OpenAI API
+- OpenAI API / OpenRouter
 
 ## Requirements
 
@@ -25,10 +25,16 @@ npm install
 2. Fill local environment variables in `.env.local`:
 
 ```env
-OPENAI_API_KEY=your_openai_api_key_here
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_MODEL=openai/gpt-4.1-mini
+OPENROUTER_SITE_URL=http://localhost:3000
+OPENROUTER_APP_NAME=Ethics Arena
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
 SEARCH_API_KEY=
 ```
+
+The API route will prefer OpenRouter when `OPENROUTER_API_KEY` is present, and otherwise fall back to direct OpenAI usage via `OPENAI_API_KEY`.
 
 3. Start the development server:
 
@@ -47,7 +53,7 @@ npm run build
 - Home page prototype
 - Debate room prototype
 - Mock debate flow
-- OpenAI-backed `/api/debate` route with mock fallback
+- OpenAI/OpenRouter-backed `/api/debate` route with mock fallback
 - Local project-specific skill drafts
 
 ## Notes
