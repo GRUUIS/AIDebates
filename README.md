@@ -26,15 +26,16 @@ npm install
 
 ```env
 OPENROUTER_API_KEY=your_openrouter_api_key_here
-OPENROUTER_MODEL=openai/gpt-4.1-mini
+OPENROUTER_MODEL=openai/gpt-5.4-mini
 OPENROUTER_SITE_URL=http://localhost:3000
 OPENROUTER_APP_NAME=Ethics Arena
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
-SEARCH_API_KEY=
+SEARCH_API_KEY=your_tavily_api_key_here
 ```
 
 The API route will prefer OpenRouter when `OPENROUTER_API_KEY` is present, and otherwise fall back to direct OpenAI usage via `OPENAI_API_KEY`.
+Get search key here: https://www.tavily.com/
 
 3. Start the development server:
 
