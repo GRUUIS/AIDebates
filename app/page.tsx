@@ -1,25 +1,60 @@
+﻿"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { FeatureCard } from "@/components/feature-card";
+import { createStarterSession, debateModeMeta, deleteSession, duplicateSession, ensureStarterSession, listSessions } from "@/lib/session-store";
+import type { SessionSummary } from "@/types/debate";
 
 const features = [
   {
-    title: "Debaters With Distinct Moral Lenses",
-    description:
-      "Run multiple AI participants as utilitarian, deontological, virtue-ethics, or policy-oriented speakers instead of collapsing everything into one blended answer."
+    title: "Session Workspace",
+    description: "Create separate debates with their own topic, framing, participants, evidence state, and analysis history."
   },
   {
-    title: "Moderator-Led Turn Structure",
-    description:
-      "Use a moderator agent to frame the issue, assign rebuttals, request evidence, and keep the room from looping into repetitive talking points."
+    title: "Mode-Driven Orchestration",
+    description: "Choose between Classic, Jury, Networked Judge, Stance Shift, and Postmortem modes when creating a room."
   },
   {
-    title: "Evidence Cards In The Chat Flow",
-    description:
-      "Attach retrieved papers, articles, or case studies to concrete claims so the debate feels grounded rather than purely performative."
+    title: "Local-First Persistence",
+    description: "Keep multiple debates on-device with instant reload, duplication, and deletion without needing accounts yet."
   }
 ];
 
+function formatTime(value: string): string {
+  return new Date(value).toLocaleString();
+}
+
 export default function HomePage() {
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+
+  useEffect(() => {
+    const starter = ensureStarterSession();
+    setSessions(listSessions());
+    if (!starter) {
+      setSessions(listSessions());
+    }
+  }, []);
+
+  function refresh() {
+    setSessions(listSessions());
+  }
+
+  function handleCreateSample() {
+    createStarterSession();
+    refresh();
+  }
+
+  function handleDelete(sessionId: string) {
+    deleteSession(sessionId);
+    refresh();
+  }
+
+  function handleDuplicate(sessionId: string) {
+    duplicateSession(sessionId);
+    refresh();
+  }
+
   return (
     <main className="page-pad">
       <div className="shell stack">
@@ -27,51 +62,92 @@ export default function HomePage() {
           <span className="eyebrow">Ethics Arena</span>
           <div className="hero-grid">
             <div>
-              <h1 className="hero-title">A chatroom where AI agents argue like people with principles.</h1>
+              <h1 className="hero-title">A workspace for AI debates, not just one fixed prototype room.</h1>
               <p className="lede">
-                Build a multi-agent debate system around difficult moral questions. Each participant holds a stable
-                ethical lens, cites outside material, and answers both the user and the other agents inside a guided
-                conversation.
+                Create independent sessions with your own topic, framing, participant mix, and OpenRouter debate mode. Keep classic arguments, jury reviews, networked judging, and postmortems organized in one place.
               </p>
               <div className="pill-row">
-                <span className="pill">Multi-agent orchestration</span>
-                <span className="pill">Retrieval-augmented argumentation</span>
-                <span className="pill">User participation</span>
-                <span className="pill">Safety-aware moderation</span>
+                <span className="pill">Multi-session workspace</span>
+                <span className="pill">OpenRouter debate modes</span>
+                <span className="pill">Local-first persistence</span>
+                <span className="pill">Evidence-aware analysis</span>
               </div>
               <div className="cta-row">
-                <Link href="/debate" className="cta">
-                  Open prototype room
+                <Link href="/debate/new" className="cta">
+                  New debate
                 </Link>
-                <a className="ghost" href="/AI_Ethics_Debate_Project_Proposal.pdf" target="_blank" rel="noreferrer">
-                  View proposal PDF
-                </a>
+                <button className="ghost" type="button" onClick={handleCreateSample}>
+                  Add sample room
+                </button>
               </div>
             </div>
             <div className="stack">
               <div className="kpi-grid">
                 <div className="kpi">
-                  <strong>4</strong>
-                  voices in the first MVP
+                  <strong>{sessions.length}</strong>
+                  saved sessions
                 </div>
                 <div className="kpi">
-                  <strong>1</strong>
-                  moderator with turn control
+                  <strong>{Object.keys(debateModeMeta).length}</strong>
+                  debate modes
                 </div>
                 <div className="kpi">
-                  <strong>3</strong>
-                  priority skills drafted locally
+                  <strong>Local</strong>
+                  first persistence
                 </div>
               </div>
               <div className="panel">
-                <h2>Why this scope works</h2>
+                <h2>Workspace view</h2>
                 <p className="lede">
-                  The MVP focuses on the hard parts that matter academically: role separation, structured rebuttal,
-                  source grounding, and a user who can interrupt the flow. Video and image retrieval stay optional.
+                  Start from a blank debate, duplicate a previous line of inquiry, or reopen any recent room. Each session keeps its own chat, evidence, and analysis outputs.
                 </p>
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head-v2">
+            <h2>Recent Sessions</h2>
+            <Link href="/debate/new" className="ghost ghost-inline-v2">
+              New debate
+            </Link>
+          </div>
+          {sessions.length > 0 ? (
+            <div className="workspace-grid-v2">
+              {sessions.map((session) => (
+                <article key={session.id} className="workspace-card-v2">
+                  <div className="workspace-card-head-v2">
+                    <div>
+                      <strong>{session.title}</strong>
+                      <p>{session.topic}</p>
+                    </div>
+                    <span className="workspace-mode-v2">{debateModeMeta[session.mode].label}</span>
+                  </div>
+                  <div className="workspace-meta-v2">
+                    <span>{session.participantCount} participants</span>
+                    <span>Updated {formatTime(session.updatedAt)}</span>
+                  </div>
+                  <div className="workspace-actions-v2">
+                    <Link href={`/debate/${session.id}`} className="cta cta-small-v2">
+                      Open
+                    </Link>
+                    <button className="ghost ghost-small-v2" type="button" onClick={() => handleDuplicate(session.id)}>
+                      Duplicate
+                    </button>
+                    <button className="ghost ghost-small-v2 danger-ghost-v2" type="button" onClick={() => handleDelete(session.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-workspace-v2 panel">
+              <strong>No debate sessions yet.</strong>
+              <p>Create a fresh room with your own framing, mode, and participant mix.</p>
+            </div>
+          )}
         </section>
 
         <section className="section">

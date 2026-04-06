@@ -34,7 +34,7 @@ export function EvidenceSourceCard({ evidence, isHighlighted, isUsedThisTurn, on
             Remove
           </button>
         ) : null}
-        <a href={evidence.url} target="_blank" rel="noreferrer">
+        <a className="source-link-v2" href={evidence.url} target="_blank" rel="noreferrer">
           Open source
         </a>
       </div>
