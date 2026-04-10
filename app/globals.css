@@ -1442,3 +1442,122 @@ select {
     max-height: min(70vh, 640px);
   }
 }
+
+.focus-line-v2 {
+  margin: 10px 0 0;
+  color: #0f766e;
+  font-size: 0.94rem;
+  font-weight: 600;
+}
+
+.message-submeta-v2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.message-intent-v2,
+.message-reply-v2,
+.source-inline-label-v2 {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.08);
+  color: #115e59;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.audio-button-v2 {
+  align-self: flex-start;
+}
+
+.composer-toolbar-v3 {
+  grid-template-columns: minmax(0, auto) 1fr auto;
+}
+
+.composer-tools-v2 {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.source-claims-v2 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.source-claims-v2 span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #1d4ed8;
+  font-size: 0.78rem;
+}
+
+.source-detail-v2 {
+  margin: 0 0 10px;
+  color: #4b5563;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.generated-image-grid-v2 {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.generated-image-card-v2 {
+  margin: 0;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.generated-image-card-v2 img {
+  display: block;
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.generated-image-card-v2 figcaption {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 980px) {
+  .composer-toolbar-v3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.composer-voice-row-v2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.mic-button-v2.live {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.22);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+@media (max-width: 980px) {
+  .composer-voice-row-v2 {
+    align-items: stretch;
+  }
+}

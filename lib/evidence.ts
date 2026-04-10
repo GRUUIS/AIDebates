@@ -1,12 +1,24 @@
 ﻿import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { createHash } from "node:crypto";
-import type { EvidenceCard, EvidenceCredibility, EvidenceSourceKind, EvidenceType } from "@/types/debate";
+import type { EvidenceCard, EvidenceCredibility, EvidenceSourceKind, EvidenceType, RawInputType } from "@/types/debate";
+import { indexEvidenceCard } from "@/lib/embeddings";
+import { callJsonChatCompletion, getClient, getLlmConfig, getPreferredModel } from "@/lib/llm";
 
 interface TavilyResult {
   title?: string;
   url?: string;
   content?: string;
+}
+
+interface MultimodalExtraction {
+  title: string;
+  summary: string;
+  excerpt: string;
+  claims: string[];
+  transcript?: string;
+  ocrText?: string;
+  sourceMeta?: Record<string, string | number | boolean>;
 }
 
 const MAX_SUMMARY_CHARS = 280;
@@ -33,10 +45,7 @@ const BLOCKLIST_SELECTORS = [
 ];
 
 function cleanText(input: string): string {
-  return input
-    .replace(/\u0000/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return input.replace(/\u0000/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function truncate(input: string, max: number): string {
@@ -57,6 +66,11 @@ function extractDomain(url: string): string {
   }
 }
 
+function buildUploadUrl(kind: RawInputType, name: string): string {
+  const safeName = encodeURIComponent(name || `${kind}-upload`);
+  return `upload://${kind}/${safeName}`;
+}
+
 function detectSourceType(url: string, title?: string): EvidenceType {
   const lower = `${url} ${title ?? ""}`.toLowerCase();
 
@@ -72,8 +86,12 @@ function detectSourceType(url: string, title?: string): EvidenceType {
     return "video";
   }
 
-  if (lower.includes("image") || /\.(png|jpg|jpeg|webp)$/i.test(lower)) {
+  if (lower.includes("image") || /\.(png|jpg|jpeg|webp|gif)$/i.test(lower)) {
     return "image";
+  }
+
+  if (/\.(mp3|wav|m4a|ogg|webm)$/i.test(lower) || lower.includes("audio")) {
+    return "audio";
   }
 
   return "article";
@@ -193,25 +211,168 @@ function buildCard(params: {
   url: string;
   type: EvidenceType;
   sourceKind: EvidenceSourceKind;
+  rawInputType: RawInputType;
   summary: string;
   excerpt: string;
   retrievalStatus: EvidenceCard["retrievalStatus"];
   usedBy?: string;
+  transcript?: string;
+  ocrText?: string;
+  claims?: string[];
+  sourceMeta?: Record<string, string | number | boolean>;
 }): EvidenceCard {
-  const normalizedUrl = normalizeUrl(params.url);
+  const normalizedUrl = params.rawInputType === "url" ? normalizeUrl(params.url) : params.url;
   return {
     id: buildEvidenceId(normalizedUrl),
     title: truncate(params.title, 120),
     type: params.type,
     sourceKind: params.sourceKind,
+    rawInputType: params.rawInputType,
     summary: truncate(params.summary || params.excerpt || params.title, MAX_SUMMARY_CHARS),
     excerpt: truncate(params.excerpt || params.summary || params.title, MAX_EXCERPT_CHARS),
     url: normalizedUrl,
     domain: extractDomain(normalizedUrl),
     credibility: credibilityFrom(normalizedUrl, params.retrievalStatus),
     retrievalStatus: params.retrievalStatus,
-    usedBy: params.usedBy ?? "Grounding"
+    usedBy: params.usedBy ?? "Grounding",
+    transcript: params.transcript,
+    ocrText: params.ocrText,
+    claims: params.claims?.slice(0, 5),
+    sourceMeta: params.sourceMeta
   };
+}
+
+async function indexCard(card: EvidenceCard): Promise<EvidenceCard> {
+  await indexEvidenceCard(card).catch(() => undefined);
+  return card;
+}
+
+function toDataUrl(buffer: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+function toBase64(buffer: Buffer): string {
+  return buffer.toString("base64");
+}
+
+async function analyzeWithModel(messages: Array<Record<string, unknown>>): Promise<MultimodalExtraction | null> {
+  try {
+    const raw = await callJsonChatCompletion({
+      model: getPreferredModel("multimodal"),
+      messages
+    });
+    const parsed = JSON.parse(raw) as Partial<MultimodalExtraction>;
+    if (!parsed.summary && !parsed.excerpt && !parsed.transcript) {
+      return null;
+    }
+    return {
+      title: parsed.title?.trim() || "Uploaded evidence",
+      summary: parsed.summary?.trim() || parsed.excerpt?.trim() || "Model extracted limited context.",
+      excerpt: parsed.excerpt?.trim() || parsed.summary?.trim() || "",
+      claims: (parsed.claims ?? []).map((item) => item.trim()).filter(Boolean).slice(0, 5),
+      transcript: parsed.transcript?.trim(),
+      ocrText: parsed.ocrText?.trim(),
+      sourceMeta: parsed.sourceMeta
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function analyzeImageUpload(buffer: Buffer, mimeType: string, fileName: string): Promise<MultimodalExtraction> {
+  const extraction = await analyzeWithModel([
+    {
+      role: "system",
+      content: "You analyze uploaded images for an ethics debate. Return JSON with title, summary, excerpt, claims, optional ocrText, and optional sourceMeta. Keep excerpt citation-ready."
+    },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Summarize this image for debate use. Extract any visible text, the central claim, and 2-5 concise claims worth citing." },
+        { type: "image_url", image_url: { url: toDataUrl(buffer, mimeType) } }
+      ]
+    }
+  ]);
+
+  return (
+    extraction ?? {
+      title: fileName,
+      summary: `Uploaded image \"${fileName}\" was added as evidence, but model extraction was unavailable.`,
+      excerpt: "Image evidence uploaded without detailed OCR or captioning.",
+      claims: [],
+      sourceMeta: { mimeType }
+    }
+  );
+}
+
+async function analyzePdfUpload(buffer: Buffer, fileName: string): Promise<MultimodalExtraction> {
+  const modelFirst = await analyzeWithModel([
+    {
+      role: "system",
+      content: "You analyze uploaded PDFs for an ethics debate. Return JSON with title, summary, excerpt, claims, and sourceMeta."
+    },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Extract the most relevant summary, excerpt, and 2-5 claims from this PDF." },
+        { type: "file", file: { filename: fileName, file_data: toDataUrl(buffer, "application/pdf") } }
+      ]
+    }
+  ]);
+
+  if (modelFirst) {
+    return modelFirst;
+  }
+
+  const text = await parsePdf(buffer);
+  const excerpt = truncate(text, MAX_EXCERPT_CHARS);
+  const fallback = await analyzeWithModel([
+    {
+      role: "system",
+      content: "You analyze extracted PDF text for an ethics debate. Return JSON with title, summary, excerpt, claims, and sourceMeta."
+    },
+    {
+      role: "user",
+      content: `File name: ${fileName}\n\nExtracted text:\n${text.slice(0, 12000)}`
+    }
+  ]);
+
+  return (
+    fallback ?? {
+      title: fileName,
+      summary: excerpt || "A PDF was uploaded but only limited text could be extracted.",
+      excerpt,
+      claims: [],
+      sourceMeta: { fallback: true }
+    }
+  );
+}
+
+async function analyzeAudioUpload(buffer: Buffer, mimeType: string, fileName: string): Promise<MultimodalExtraction> {
+  const format = mimeType.split("/")[1]?.replace("x-", "") || "mp3";
+  const extraction = await analyzeWithModel([
+    {
+      role: "system",
+      content: "You transcribe and summarize uploaded audio for an ethics debate. Return JSON with title, summary, excerpt, transcript, claims, and sourceMeta."
+    },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "Transcribe this audio, summarize the speaker's position, and extract 2-5 concise claims that can be cited in a debate." },
+        { type: "input_audio", input_audio: { data: toBase64(buffer), format } }
+      ]
+    }
+  ]);
+
+  return (
+    extraction ?? {
+      title: fileName,
+      summary: `Uploaded audio \"${fileName}\" was added as evidence, but transcription was unavailable.`,
+      excerpt: "Audio evidence uploaded without reliable transcription.",
+      claims: [],
+      sourceMeta: { mimeType }
+    }
+  );
 }
 
 export async function importEvidenceFromUrl(url: string, sourceKind: EvidenceSourceKind = "user-url"): Promise<EvidenceCard> {
@@ -226,15 +387,19 @@ export async function importEvidenceFromUrl(url: string, sourceKind: EvidenceSou
       const text = await parsePdf(buffer);
       const excerpt = truncate(text, MAX_EXCERPT_CHARS);
       const retrievalStatus = excerpt.length > 120 ? "ok" : "partial";
-      return buildCard({
-        title: decodeURIComponent(normalizedUrl.split("/").pop() || "Remote PDF"),
-        url: normalizedUrl,
-        type: "paper",
-        sourceKind: sourceKind === "search" ? "search" : "user-pdf",
-        summary: excerpt || "A remote PDF was added but only limited text could be extracted.",
-        excerpt,
-        retrievalStatus
-      });
+      return indexCard(
+        buildCard({
+          title: decodeURIComponent(normalizedUrl.split("/").pop() || "Remote PDF"),
+          url: normalizedUrl,
+          type: "paper",
+          sourceKind: sourceKind === "search" ? "search" : "user-pdf",
+          rawInputType: "url",
+          summary: excerpt || "A remote PDF was added but only limited text could be extracted.",
+          excerpt,
+          retrievalStatus,
+          sourceMeta: { contentType }
+        })
+      );
     }
 
     const html = buffer.toString("utf8");
@@ -242,26 +407,97 @@ export async function importEvidenceFromUrl(url: string, sourceKind: EvidenceSou
     const excerpt = truncate(article.text, MAX_EXCERPT_CHARS);
     const retrievalStatus = excerpt.length > 120 ? "ok" : "partial";
 
-    return buildCard({
-      title: article.title,
-      url: normalizedUrl,
-      type: detectSourceType(normalizedUrl, article.title),
-      sourceKind,
-      summary: excerpt || "A user-provided URL was added but the page text was limited.",
-      excerpt,
-      retrievalStatus
-    });
+    return indexCard(
+      buildCard({
+        title: article.title,
+        url: normalizedUrl,
+        type: detectSourceType(normalizedUrl, article.title),
+        sourceKind,
+        rawInputType: "url",
+        summary: excerpt || "A user-provided URL was added but the page text was limited.",
+        excerpt,
+        retrievalStatus,
+        sourceMeta: { contentType }
+      })
+    );
   } catch (error) {
-    return buildCard({
-      title: normalizedUrl,
-      url: normalizedUrl,
-      type: inferredType,
-      sourceKind: inferredType === "paper" ? "user-pdf" : sourceKind,
-      summary: error instanceof Error ? error.message : "Failed to retrieve the source.",
-      excerpt: "The source could not be retrieved cleanly, so this card is link-only evidence until re-import succeeds.",
-      retrievalStatus: "failed"
-    });
+    return indexCard(
+      buildCard({
+        title: normalizedUrl,
+        url: normalizedUrl,
+        type: inferredType,
+        sourceKind: inferredType === "paper" ? "user-pdf" : sourceKind,
+        rawInputType: "url",
+        summary: error instanceof Error ? error.message : "Failed to retrieve the source.",
+        excerpt: "The source could not be retrieved cleanly, so this card is link-only evidence until re-import succeeds.",
+        retrievalStatus: "failed"
+      })
+    );
   }
+}
+
+export async function analyzeUploadedEvidence(file: File): Promise<EvidenceCard> {
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const mimeType = file.type || "application/octet-stream";
+  const lower = mimeType.toLowerCase();
+
+  if (lower.startsWith("image/")) {
+    const extraction = await analyzeImageUpload(buffer, mimeType, file.name);
+    return indexCard(
+      buildCard({
+        title: extraction.title || file.name,
+        url: buildUploadUrl("image", file.name),
+        type: "image",
+        sourceKind: "user-image",
+        rawInputType: "image",
+        summary: extraction.summary,
+        excerpt: extraction.excerpt,
+        retrievalStatus: extraction.ocrText || extraction.summary ? "ok" : "partial",
+        ocrText: extraction.ocrText,
+        claims: extraction.claims,
+        sourceMeta: { fileName: file.name, mimeType, ...(extraction.sourceMeta ?? {}) }
+      })
+    );
+  }
+
+  if (lower.includes("pdf")) {
+    const extraction = await analyzePdfUpload(buffer, file.name);
+    return indexCard(
+      buildCard({
+        title: extraction.title || file.name,
+        url: buildUploadUrl("pdf", file.name),
+        type: detectSourceType(file.name, extraction.title),
+        sourceKind: "user-pdf",
+        rawInputType: "pdf",
+        summary: extraction.summary,
+        excerpt: extraction.excerpt,
+        retrievalStatus: extraction.excerpt.length > 80 ? "ok" : "partial",
+        claims: extraction.claims,
+        sourceMeta: { fileName: file.name, mimeType, ...(extraction.sourceMeta ?? {}) }
+      })
+    );
+  }
+
+  if (lower.startsWith("audio/")) {
+    const extraction = await analyzeAudioUpload(buffer, mimeType, file.name);
+    return indexCard(
+      buildCard({
+        title: extraction.title || file.name,
+        url: buildUploadUrl("audio", file.name),
+        type: "audio",
+        sourceKind: "user-audio",
+        rawInputType: "audio",
+        summary: extraction.summary,
+        excerpt: extraction.excerpt,
+        retrievalStatus: extraction.transcript ? "ok" : "partial",
+        transcript: extraction.transcript,
+        claims: extraction.claims,
+        sourceMeta: { fileName: file.name, mimeType, ...(extraction.sourceMeta ?? {}) }
+      })
+    );
+  }
+
+  throw new Error(`Unsupported file type: ${mimeType || file.name}`);
 }
 
 export function mergeEvidence(...groups: EvidenceCard[][]): EvidenceCard[] {
@@ -270,11 +506,15 @@ export function mergeEvidence(...groups: EvidenceCard[][]): EvidenceCard[] {
   for (const group of groups) {
     for (const item of group) {
       const key = (() => {
-        try {
-          return normalizeUrl(item.url);
-        } catch {
-          return item.url;
+        if (item.rawInputType === "url") {
+          try {
+            return normalizeUrl(item.url);
+          } catch {
+            return item.url;
+          }
         }
+
+        return item.url;
       })();
       const existing = merged.get(key);
 
@@ -290,7 +530,11 @@ export function mergeEvidence(...groups: EvidenceCard[][]): EvidenceCard[] {
         merged.set(key, {
           ...item,
           id: buildEvidenceId(key),
-          usedBy: existing.usedBy === item.usedBy ? item.usedBy : `${existing.usedBy}, ${item.usedBy}`
+          usedBy: existing.usedBy === item.usedBy ? item.usedBy : `${existing.usedBy}, ${item.usedBy}`,
+          claims: item.claims?.length ? item.claims : existing.claims,
+          transcript: item.transcript ?? existing.transcript,
+          ocrText: item.ocrText ?? existing.ocrText,
+          sourceMeta: { ...(existing.sourceMeta ?? {}), ...(item.sourceMeta ?? {}) }
         });
       }
     }
@@ -352,9 +596,12 @@ export async function searchEvidence(query: string, topic?: string): Promise<Evi
         summary: improvedSummary,
         excerpt: card.retrievalStatus === "failed" && item.content ? truncate(cleanText(item.content), MAX_EXCERPT_CHARS) : card.excerpt,
         retrievalStatus: card.retrievalStatus === "failed" && item.content ? "partial" : card.retrievalStatus
-      };
+      } satisfies EvidenceCard;
     })
   );
 
-  return mergeEvidence(imported).slice(0, MAX_SEARCH_RESULTS);
+  const merged = mergeEvidence(imported).slice(0, MAX_SEARCH_RESULTS);
+  await Promise.all(merged.map((card) => indexEvidenceCard(card).catch(() => undefined)));
+  return merged;
 }
+

@@ -1,10 +1,13 @@
-﻿import OpenAI from "openai";
-import { defaultAgents } from "@/data/agents";
+﻿import { defaultAgents } from "@/data/agents";
+import { dedupeEvidence, findOpposingEvidence, findRelevantEvidence, findSimilarClaims, indexClaimText } from "@/lib/embeddings";
 import { importEvidenceFromUrl, mergeEvidence, searchEvidence } from "@/lib/evidence";
+import { getClient, getLlmConfig } from "@/lib/llm";
 import { createMockDebateResponse } from "@/lib/mock-debate";
-import { buildModeratorInstruction, buildSystemPrompt } from "@/lib/prompts";
+import { buildModeratorInstruction, buildRelevantTranscript, buildSystemPrompt, describeIntent } from "@/lib/prompts";
 import type {
+  AgentState,
   DebateActionRequest,
+  DebateIntent,
   DebateMessage,
   DebateResponse,
   DebateSession,
@@ -13,33 +16,11 @@ import type {
   JuryRound,
   JurorResult,
   PostmortemReport,
-  PostmortemScorecard
+  PostmortemScorecard,
+  UserIntentState
 } from "@/types/debate";
 
 const JURY_MODELS = ["openai/gpt-4o-mini", "anthropic/claude-3.5-haiku", "google/gemini-2.0-flash-001"];
-
-type StreamEvent =
-  | { type: "status"; status: string }
-  | { type: "evidence"; suggestedEvidence: EvidenceCard[]; usedLiveSearch: boolean }
-  | { type: "message_start"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string }
-  | { type: "message_delta"; delta: string }
-  | { type: "message_done"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string; attemptedModels?: string[] }
-  | { type: "analysis_start"; analysisType: "jury" | "judge" | "postmortem"; status: string }
-  | { type: "analysis_result"; analysisType: "jury" | "judge" | "postmortem"; result: JuryRound | JudgeReport | PostmortemReport }
-  | { type: "session_meta"; title: string; mode: DebateSession["mode"]; updatedAt: string }
-  | { type: "mode_state"; modeState: DebateSession["modeState"] }
-  | { type: "done"; suggestedEvidence: EvidenceCard[]; usedLiveSearch: boolean; attemptedModels?: string[] }
-  | { type: "error"; error: string; attemptedModels?: string[]; suggestedEvidence: EvidenceCard[]; provider?: string; model?: string };
-
-type LlmProvider = "openrouter" | "openai";
-
-interface LlmConfig {
-  provider: LlmProvider;
-  apiKey: string;
-  models: string[];
-  baseURL?: string;
-  defaultHeaders?: Record<string, string>;
-}
 
 interface TurnPlan {
   nextSpeakerId: string;
@@ -47,7 +28,29 @@ interface TurnPlan {
   claimToAnswer: string;
   evidenceIds: string[];
   needsMoreEvidence: boolean;
+  replyToMessageId?: string;
+  targetSpeakerId?: string;
+  intent: DebateIntent;
+  conversationFocus: string;
 }
+
+interface GeneratedTurn {
+  visibleMessage: string;
+  privateStateUpdate: AgentState;
+}
+
+type StreamEvent =
+  | { type: "status"; status: string }
+  | { type: "evidence"; suggestedEvidence: EvidenceCard[]; usedLiveSearch: boolean }
+  | { type: "message_start"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string }
+  | { type: "message_delta"; delta: string }
+  | { type: "message_done"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string; attemptedModels?: string[]; agentStateMap: DebateSession["agentStateMap"]; userIntentState?: UserIntentState; conversationFocus?: string }
+  | { type: "analysis_start"; analysisType: "jury" | "judge" | "postmortem"; status: string }
+  | { type: "analysis_result"; analysisType: "jury" | "judge" | "postmortem"; result: JuryRound | JudgeReport | PostmortemReport }
+  | { type: "session_meta"; title: string; mode: DebateSession["mode"]; updatedAt: string }
+  | { type: "mode_state"; modeState: DebateSession["modeState"] }
+  | { type: "done"; suggestedEvidence: EvidenceCard[]; usedLiveSearch: boolean; attemptedModels?: string[] }
+  | { type: "error"; error: string; attemptedModels?: string[]; suggestedEvidence: EvidenceCard[]; provider?: string; model?: string };
 
 const plannerSchema = {
   type: "object",
@@ -57,21 +60,37 @@ const plannerSchema = {
       type: "string",
       enum: defaultAgents.filter((agent) => agent.role !== "user").map((agent) => agent.id)
     },
-    moderatorInstruction: {
-      type: "string"
-    },
-    claimToAnswer: {
-      type: "string"
-    },
-    evidenceIds: {
-      type: "array",
-      items: { type: "string" }
-    },
-    needsMoreEvidence: {
-      type: "boolean"
+    moderatorInstruction: { type: "string" },
+    claimToAnswer: { type: "string" },
+    evidenceIds: { type: "array", items: { type: "string" } },
+    needsMoreEvidence: { type: "boolean" },
+    replyToMessageId: { type: "string" },
+    targetSpeakerId: { type: "string" },
+    intent: { type: "string", enum: ["answer_user", "rebut", "support", "clarify", "question", "synthesize"] },
+    conversationFocus: { type: "string" }
+  },
+  required: ["nextSpeakerId", "moderatorInstruction", "claimToAnswer", "evidenceIds", "needsMoreEvidence", "intent", "conversationFocus"]
+} as const;
+
+const generatedTurnSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    visibleMessage: { type: "string" },
+    privateStateUpdate: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        currentClaim: { type: "string" },
+        nextQuestion: { type: "string" },
+        opponentFocusId: { type: "string" },
+        usedEvidenceIds: { type: "array", items: { type: "string" } },
+        recentClaimEmbeddings: { type: "array", items: { type: "string" } }
+      },
+      required: ["currentClaim", "usedEvidenceIds", "recentClaimEmbeddings"]
     }
   },
-  required: ["nextSpeakerId", "moderatorInstruction", "claimToAnswer", "evidenceIds", "needsMoreEvidence"]
+  required: ["visibleMessage", "privateStateUpdate"]
 } as const;
 
 const jurySchema = {
@@ -123,14 +142,6 @@ const postmortemSchema = {
   required: ["summary", "bestArgumentByAgent", "unsupportedClaims", "missedQuestions", "nextPrompts", "scorecard"]
 } as const;
 
-function parseModelList(value?: string): string[] {
-  return (value ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-}
-
-function unique<T>(items: T[]): T[] {
-  return Array.from(new Set(items));
-}
-
 function splitForStreaming(content: string): string[] {
   return Array.from(content);
 }
@@ -159,45 +170,6 @@ function createId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 }
 
-function getLlmConfig(): LlmConfig | null {
-  if (process.env.OPENROUTER_API_KEY) {
-    return {
-      provider: "openrouter",
-      apiKey: process.env.OPENROUTER_API_KEY,
-      models: unique([
-        process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || "openai/gpt-4o-mini",
-        ...parseModelList(process.env.OPENROUTER_FALLBACK_MODELS),
-        "openai/gpt-4o-mini",
-        "anthropic/claude-3.5-haiku",
-        "google/gemini-2.0-flash-001"
-      ]),
-      baseURL: "https://openrouter.ai/api/v1",
-      defaultHeaders: {
-        ...(process.env.OPENROUTER_SITE_URL ? { "HTTP-Referer": process.env.OPENROUTER_SITE_URL } : {}),
-        ...(process.env.OPENROUTER_APP_NAME ? { "X-Title": process.env.OPENROUTER_APP_NAME } : {})
-      }
-    };
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    return {
-      provider: "openai",
-      apiKey: process.env.OPENAI_API_KEY,
-      models: unique([process.env.OPENAI_MODEL || "gpt-4.1-mini", "gpt-4o-mini"])
-    };
-  }
-
-  return null;
-}
-
-function getClient(config: LlmConfig): OpenAI {
-  return new OpenAI({
-    apiKey: config.apiKey,
-    baseURL: config.baseURL,
-    defaultHeaders: config.defaultHeaders
-  });
-}
-
 function appendUserMessage(session: DebateSession, userMessage?: string): DebateSession {
   const trimmed = userMessage?.trim();
   if (!trimmed) {
@@ -214,9 +186,46 @@ function appendUserMessage(session: DebateSession, userMessage?: string): Debate
         speaker: "You",
         role: "user",
         turn: session.messages.length + 1,
-        content: trimmed
+        content: trimmed,
+        intent: "answer_user"
       }
     ]
+  };
+}
+
+function ensureSessionDefaults(session: DebateSession): DebateSession {
+  const agentStateMap = session.agentStateMap ?? Object.fromEntries(
+    session.agents
+      .filter((agent) => agent.role !== "user")
+      .map((agent) => [agent.id, { currentClaim: agent.stance, usedEvidenceIds: [], recentClaimEmbeddings: [] } satisfies AgentState])
+  );
+
+  return {
+    ...session,
+    agentStateMap,
+    generatedAssets: session.generatedAssets ?? [],
+    userIntentState: session.userIntentState ?? { currentQuestion: session.topic, unansweredPoints: [] },
+    conversationFocus: session.conversationFocus ?? session.topic,
+    settings: {
+      ...session.settings,
+      autoSpeakResponses: session.settings.autoSpeakResponses ?? false
+    }
+  };
+}
+
+function updateUserIntentState(session: DebateSession, userMessage?: string): DebateSession {
+  const trimmed = userMessage?.trim();
+  if (!trimmed) {
+    return session;
+  }
+
+  return {
+    ...session,
+    userIntentState: {
+      currentQuestion: trimmed,
+      unansweredPoints: [trimmed]
+    },
+    conversationFocus: trimmed.length > 180 ? `${trimmed.slice(0, 177)}...` : trimmed
   };
 }
 
@@ -226,16 +235,25 @@ function buildEvidenceDigest(evidence: EvidenceCard[]): string {
   }
 
   return evidence
-    .map((item) => `- ${item.id} | ${item.title} | ${item.domain} | ${item.type} | credibility=${item.credibility} | status=${item.retrievalStatus} | ${item.excerpt} (${item.url})`)
+    .map((item) => {
+      const claimText = item.claims?.length ? ` claims=${item.claims.join(" | ")}` : "";
+      return `- ${item.id} | ${item.title} | ${item.domain} | ${item.type} | credibility=${item.credibility} | status=${item.retrievalStatus} | ${item.excerpt}${claimText} (${item.url})`;
+    })
     .join("\n");
 }
 
 function buildTranscript(session: DebateSession): string {
-  return session.messages.map((message) => `Turn ${message.turn} | ${message.speaker} (${message.role}): ${message.content}`).join("\n");
+  return buildRelevantTranscript(session.messages);
 }
 
 function buildAgentSummaries(session: DebateSession): string {
-  return session.agents.filter((agent) => agent.role !== "user").map((agent) => `${agent.id}: ${agent.name} | ${agent.lens} | ${agent.stance}`).join("\n");
+  return session.agents
+    .filter((agent) => agent.role !== "user")
+    .map((agent) => {
+      const state = session.agentStateMap[agent.id];
+      return `${agent.id}: ${agent.name} | ${agent.lens} | ${agent.stance} | currentClaim=${state?.currentClaim ?? agent.stance} | opponentFocus=${state?.opponentFocusId ?? "none"}`;
+    })
+    .join("\n");
 }
 
 function countAiTurns(session: DebateSession): number {
@@ -259,17 +277,67 @@ async function resolveEvidence(session: DebateSession, userMessage?: string): Pr
   }
 
   const maxEvidence = session.settings.maxActiveEvidence ?? 8;
+  const merged = await dedupeEvidence(mergeEvidence(session.evidence, importedFromMessage, liveEvidence));
   return {
-    mergedEvidence: mergeEvidence(session.evidence, importedFromMessage, liveEvidence).slice(0, maxEvidence),
+    mergedEvidence: merged.slice(0, maxEvidence),
     liveEvidence
   };
 }
 
-async function planTurn(client: OpenAI, model: string, session: DebateSession): Promise<TurnPlan> {
+function shouldTryNextModel(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return message.includes("not available in your region") || message.includes("rate limit") || message.includes("temporarily") || message.includes("overloaded") || message.includes("provider returned error") || message.includes("unsupported") || message.includes("timeout") || message.includes("503") || message.includes("429") || message.includes("403");
+}
+
+function findLastMessageByRole(session: DebateSession, role: DebateMessage["role"]): DebateMessage | undefined {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    if (session.messages[index].role === role) {
+      return session.messages[index];
+    }
+  }
+  return undefined;
+}
+
+function findMostOpposedSpeaker(session: DebateSession, targetSpeakerId?: string): string {
+  const debaters = session.agents.filter((agent) => agent.role === "debater");
+  if (!targetSpeakerId) {
+    return debaters[0]?.id ?? "moderator";
+  }
+
+  const target = session.agents.find((agent) => agent.id === targetSpeakerId);
+  const preferred = debaters.find((agent) => agent.id !== targetSpeakerId && agent.lens !== target?.lens);
+  return preferred?.id ?? debaters.find((agent) => agent.id !== targetSpeakerId)?.id ?? "moderator";
+}
+async function buildPlannerHints(session: DebateSession, userMessage?: string) {
+  const latestMessage = session.messages[session.messages.length - 1];
+  const latestUserMessage = userMessage?.trim() ? latestMessage : findLastMessageByRole(session, "user");
+  const latestNonUserMessage = [...session.messages].reverse().find((message) => message.role !== "user");
+  const replyTarget = latestMessage.role === "user" ? latestNonUserMessage : latestMessage;
+  const intent: DebateIntent = latestMessage.role === "user" ? "answer_user" : replyTarget?.role === "moderator" ? "clarify" : "rebut";
+  const heuristicSpeakerId = intent === "answer_user" ? findMostOpposedSpeaker(session, latestNonUserMessage?.speakerId) : findMostOpposedSpeaker(session, replyTarget?.speakerId);
+  const claimToAnswer = latestMessage.content;
+  const relevantEvidence = await findRelevantEvidence(latestUserMessage?.content ?? claimToAnswer, session.evidence, 4);
+  const opposingEvidence = await findOpposingEvidence(claimToAnswer, session.evidence, 3, relevantEvidence.map((item) => item.id));
+  const recentRelatedMessages = await findSimilarClaims(claimToAnswer, session.messages, 4, latestMessage.id);
+
+  return {
+    latestMessage,
+    latestUserMessage,
+    replyTarget,
+    intent,
+    heuristicSpeakerId,
+    claimToAnswer,
+    candidateEvidence: [...relevantEvidence, ...opposingEvidence].slice(0, 6),
+    recentRelatedMessages
+  };
+}
+
+async function planTurn(client: ReturnType<typeof getClient>, model: string, session: DebateSession, userMessage?: string): Promise<TurnPlan> {
   const moderatorInstructions = buildModeratorInstruction(session);
   const stanceShiftDirective = shouldActivateStanceShift(session)
     ? `Stance shift is active. Prefer choosing one of these debaters next: ${(session.modeState.switchedAgentIds ?? ["utilitarian", "deontologist"]).join(", ")}.`
     : "";
+  const hints = await buildPlannerHints(session, userMessage);
 
   const response = await client.responses.create({
     model,
@@ -277,7 +345,12 @@ async function planTurn(client: OpenAI, model: string, session: DebateSession): 
       "You plan the next turn in a multi-agent ethics debate.",
       moderatorInstructions,
       stanceShiftDirective,
-      "Pick one next speaker, specify the exact claim from the latest turn they must answer, and choose only evidence ids that are already available.",
+      `Heuristic target intent: ${hints.intent}.`,
+      `Heuristic next speaker candidate: ${hints.heuristicSpeakerId}.`,
+      `Prefer replyToMessageId=${hints.replyTarget?.id ?? "none"} when it fits.`,
+      "If the latest message is from the user, the first AI response should directly answer the user before broadening the debate.",
+      "When the latest message is from a debater, prefer a different debater who can rebut that claim instead of repeating it.",
+      "Choose only evidence ids that are already available.",
       "Prefer strong evidence cards with retrievalStatus ok or partial. Ignore failed evidence unless explicitly discussing the lack of evidence.",
       "If the evidence is weak, set needsMoreEvidence to true and make the moderator instruction request better sourcing.",
       "Use only the JSON schema requested in text.format."
@@ -285,12 +358,19 @@ async function planTurn(client: OpenAI, model: string, session: DebateSession): 
     input: [
       `Topic: ${session.topic}`,
       `Framing: ${session.framing}`,
+      `Conversation focus: ${session.conversationFocus ?? session.topic}`,
+      `Latest user intent: ${session.userIntentState?.currentQuestion ?? "No fresh user question"}`,
       "Available agents:",
       buildAgentSummaries(session),
       "Transcript:",
       buildTranscript(session),
+      "Recent relevant exchanges:",
+      buildRelevantTranscript(hints.recentRelatedMessages),
       "Evidence available:",
-      buildEvidenceDigest(session.evidence)
+      buildEvidenceDigest(session.evidence),
+      "Candidate evidence to consider first:",
+      buildEvidenceDigest(hints.candidateEvidence),
+      `Heuristic claim to answer: ${hints.claimToAnswer}`
     ].join("\n\n"),
     text: {
       format: {
@@ -302,37 +382,64 @@ async function planTurn(client: OpenAI, model: string, session: DebateSession): 
     }
   });
 
-  return JSON.parse(response.output_text) as TurnPlan;
+  const parsed = JSON.parse(response.output_text) as TurnPlan;
+  return {
+    ...parsed,
+    intent: parsed.intent ?? hints.intent,
+    conversationFocus: parsed.conversationFocus || session.conversationFocus || session.topic,
+    replyToMessageId: parsed.replyToMessageId || hints.replyTarget?.id,
+    targetSpeakerId: parsed.targetSpeakerId || hints.replyTarget?.speakerId,
+    claimToAnswer: parsed.claimToAnswer || hints.claimToAnswer,
+    evidenceIds: (parsed.evidenceIds?.length ?? 0) > 0 ? parsed.evidenceIds : hints.candidateEvidence.map((item) => item.id).slice(0, 3)
+  };
 }
 
-async function generateSpeakerMessage(client: OpenAI, model: string, session: DebateSession, plan: TurnPlan): Promise<string> {
+async function generateSpeakerTurn(client: ReturnType<typeof getClient>, model: string, session: DebateSession, plan: TurnPlan): Promise<GeneratedTurn> {
   const speaker = session.agents.find((agent) => agent.id === plan.nextSpeakerId) ?? defaultAgents[0];
   const selectedEvidence = session.evidence.filter((item) => plan.evidenceIds.includes(item.id));
+  const replyTarget = plan.replyToMessageId ? session.messages.find((message) => message.id === plan.replyToMessageId) : undefined;
   const stanceShiftActive = shouldActivateStanceShift(session) && (session.modeState.switchedAgentIds ?? []).includes(speaker.id);
+  const recentSimilarClaims = await findSimilarClaims(session.agentStateMap[speaker.id]?.currentClaim ?? speaker.stance, session.messages, 3, replyTarget?.id);
 
   const response = await client.responses.create({
     model,
     instructions: [
       buildSystemPrompt(speaker, session),
       `Moderator instruction: ${plan.moderatorInstruction}`,
+      `Intent for this turn: ${plan.intent}. ${describeIntent(plan.intent)}`,
       `Claim to answer: ${plan.claimToAnswer}`,
+      replyTarget ? `Reply target: ${replyTarget.speaker} said: ${replyTarget.content}` : "Reply target: address the live question in the room.",
       plan.needsMoreEvidence ? "The evidence is incomplete. Be explicit about uncertainty and ask for better sourcing if needed." : "Use the best available evidence naturally without overstating confidence.",
       stanceShiftActive
         ? "Stance shift is active. Steelman the opposing side as strongly as possible while keeping the same moral lens. This is temporary and should read as an intentional reversal, not a permanent character rewrite."
-        : ""
+        : "",
+      "Return JSON with visibleMessage and privateStateUpdate.",
+      "privateStateUpdate.currentClaim should capture the main point you just advanced.",
+      "privateStateUpdate.usedEvidenceIds should list only evidence ids actually relied on."
     ].filter(Boolean).join("\n\n"),
-    input: ["Latest transcript:", buildTranscript(session), "Selected evidence cards:", buildEvidenceDigest(selectedEvidence), "Write the next speaker's reply now."].join("\n\n")
+    input: [
+      "Latest transcript:",
+      buildTranscript(session),
+      "Most relevant earlier exchanges to avoid repetition:",
+      buildRelevantTranscript(recentSimilarClaims),
+      "Selected evidence cards:",
+      buildEvidenceDigest(selectedEvidence),
+      "Write the next speaker's reply now."
+    ].join("\n\n"),
+    text: {
+      format: {
+        type: "json_schema",
+        name: "generated_turn",
+        schema: generatedTurnSchema,
+        strict: true
+      }
+    }
   });
 
-  return response.output_text.trim();
+  return JSON.parse(response.output_text) as GeneratedTurn;
 }
 
-function shouldTryNextModel(error: unknown): boolean {
-  const message = error instanceof Error ? error.message.toLowerCase() : "";
-  return message.includes("not available in your region") || message.includes("rate limit") || message.includes("temporarily") || message.includes("overloaded") || message.includes("provider returned error") || message.includes("unsupported") || message.includes("timeout") || message.includes("503") || message.includes("429") || message.includes("403");
-}
-
-async function generateDebateResponse(session: DebateSession): Promise<DebateResponse & { provider?: string; model?: string; usedLiveModel?: boolean }> {
+async function generateDebateResponse(session: DebateSession, userMessage?: string): Promise<DebateResponse & { provider?: string; model?: string; usedLiveModel?: boolean; privateStateUpdate?: AgentState; conversationFocus?: string; userIntentState?: UserIntentState }> {
   const config = getLlmConfig();
 
   if (!config) {
@@ -352,9 +459,9 @@ async function generateDebateResponse(session: DebateSession): Promise<DebateRes
     attemptedModels.push(model);
 
     try {
-      const plan = await planTurn(client, model, session);
+      const plan = await planTurn(client, model, session, userMessage);
       const speaker = session.agents.find((agent) => agent.id === plan.nextSpeakerId) ?? defaultAgents[0];
-      const content = await generateSpeakerMessage(client, model, session, plan);
+      const turn = await generateSpeakerTurn(client, model, session, plan);
 
       return {
         nextSpeakerId: speaker.id,
@@ -365,14 +472,21 @@ async function generateDebateResponse(session: DebateSession): Promise<DebateRes
           speaker: speaker.name,
           role: speaker.role,
           turn: session.messages.length + 1,
-          content
+          content: turn.visibleMessage.trim(),
+          replyToMessageId: plan.replyToMessageId,
+          targetSpeakerId: plan.targetSpeakerId,
+          intent: plan.intent,
+          citations: plan.evidenceIds
         },
         suggestedEvidence: session.evidence,
         evidenceUsed: plan.evidenceIds,
         attemptedModels,
         provider: config.provider,
         model,
-        usedLiveModel: true
+        usedLiveModel: true,
+        privateStateUpdate: turn.privateStateUpdate,
+        conversationFocus: plan.conversationFocus,
+        userIntentState: session.userIntentState
       };
     } catch (error) {
       lastError = error;
@@ -392,8 +506,7 @@ async function generateDebateResponse(session: DebateSession): Promise<DebateRes
     usedLiveModel: false
   };
 }
-
-async function runJury(client: OpenAI, session: DebateSession): Promise<JuryRound> {
+async function runJury(client: ReturnType<typeof getClient>, session: DebateSession): Promise<JuryRound> {
   const jurors = await Promise.all(
     JURY_MODELS.map(async (model) => {
       try {
@@ -444,7 +557,7 @@ async function runJury(client: OpenAI, session: DebateSession): Promise<JuryRoun
   };
 }
 
-async function runJudge(client: OpenAI, session: DebateSession): Promise<{ report: JudgeReport; suggestedEvidence: EvidenceCard[] }> {
+async function runJudge(client: ReturnType<typeof getClient>, session: DebateSession): Promise<{ report: JudgeReport; suggestedEvidence: EvidenceCard[] }> {
   const judgeQuery = `${session.topic} ${session.messages.slice(-3).map((message) => message.content).join(" ")}`;
   const judgeEvidence = await searchEvidence(judgeQuery, session.topic).catch(() => [] as EvidenceCard[]);
   const evidence = mergeEvidence(session.evidence, judgeEvidence).slice(0, session.settings.maxActiveEvidence ?? 8);
@@ -478,7 +591,7 @@ async function runJudge(client: OpenAI, session: DebateSession): Promise<{ repor
   };
 }
 
-async function runPostmortem(client: OpenAI, session: DebateSession): Promise<PostmortemReport> {
+async function runPostmortem(client: ReturnType<typeof getClient>, session: DebateSession): Promise<PostmortemReport> {
   const response = await client.responses.create({
     model: getLlmConfig()?.models[0] ?? "gpt-4o-mini",
     instructions: [
@@ -505,6 +618,23 @@ async function runPostmortem(client: OpenAI, session: DebateSession): Promise<Po
   };
 }
 
+function mergeAgentState(current: DebateSession["agentStateMap"], speakerId: string, update?: AgentState, evidenceIds: string[] = []): DebateSession["agentStateMap"] {
+  if (!update) {
+    return current;
+  }
+
+  return {
+    ...current,
+    [speakerId]: {
+      currentClaim: update.currentClaim,
+      nextQuestion: update.nextQuestion,
+      opponentFocusId: update.opponentFocusId,
+      usedEvidenceIds: (update.usedEvidenceIds?.length ?? 0) > 0 ? update.usedEvidenceIds : evidenceIds,
+      recentClaimEmbeddings: update.recentClaimEmbeddings
+    }
+  };
+}
+
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as DebateActionRequest | null;
   const baseSession = body?.session;
@@ -523,22 +653,23 @@ export async function POST(request: Request) {
       try {
         const config = getLlmConfig();
         const client = config ? getClient(config) : null;
-        let session = { ...baseSession, updatedAt: nowIso() };
+        let session = ensureSessionDefaults({ ...baseSession, updatedAt: nowIso() });
         const requestedAction = body?.requestedAction ?? "send_turn";
 
         send({ type: "session_meta", title: session.title, mode: session.mode, updatedAt: session.updatedAt });
 
         if (requestedAction === "send_turn") {
-          send({ type: "status", status: "Checking pasted links and preparing sources..." });
+          send({ type: "status", status: body?.userMessage?.trim() ? "Checking pasted links, uploads, and preparing sources..." : "Advancing the internal exchange with the current evidence set..." });
           session = appendUserMessage(session, body?.userMessage);
-          send({ type: "status", status: session.settings.enableSearch && body?.userMessage?.trim() ? "Searching Tavily for supporting evidence..." : "Using the current evidence set..." });
+          session = updateUserIntentState(session, body?.userMessage);
+          send({ type: "status", status: session.settings.enableSearch && body?.userMessage?.trim() ? "Searching Tavily for supporting evidence..." : "Selecting the best current evidence..." });
 
           const { mergedEvidence, liveEvidence } = await resolveEvidence(session, body?.userMessage);
           session = { ...session, evidence: mergedEvidence };
           send({ type: "evidence", suggestedEvidence: mergedEvidence, usedLiveSearch: liveEvidence.length > 0 });
           send({ type: "status", status: "Planning the next speaker..." });
 
-          const response = await generateDebateResponse(session);
+          const response = await generateDebateResponse(session, body?.userMessage);
           if (!response.draftMessage) {
             send({
               type: "error",
@@ -568,17 +699,32 @@ export async function POST(request: Request) {
             send({ type: "message_delta", delta: segment });
             await sleep(getStreamingDelay(segment));
           }
+          const updatedDraft = { ...response.draftMessage, content: streamedContent };
+          const nextStateUpdate = response.privateStateUpdate
+            ? {
+                ...response.privateStateUpdate,
+                recentClaimEmbeddings: (
+                  await Promise.all([
+                    indexClaimText(response.privateStateUpdate.currentClaim),
+                    indexClaimText(streamedContent)
+                  ])
+                ).filter(Boolean) as string[]
+              }
+            : undefined;
 
           session = {
             ...session,
-            messages: [...session.messages, { ...response.draftMessage, content: streamedContent }],
+            messages: [...session.messages, updatedDraft],
             messageEvidenceMap: {
               ...session.messageEvidenceMap,
-              [response.draftMessage.id]: response.evidenceUsed
+              [updatedDraft.id]: response.evidenceUsed
             },
+            agentStateMap: mergeAgentState(session.agentStateMap, updatedDraft.speakerId, nextStateUpdate, response.evidenceUsed),
+            conversationFocus: response.conversationFocus ?? session.conversationFocus,
+            userIntentState: response.userIntentState ?? session.userIntentState,
             modeState: {
               ...session.modeState,
-              completedAiTurns: countAiTurns({ ...session, messages: [...session.messages, { ...response.draftMessage, content: streamedContent }] }),
+              completedAiTurns: countAiTurns({ ...session, messages: [...session.messages, updatedDraft] }),
               stanceShiftActive: shouldActivateStanceShift(session),
               stanceShiftApplied: session.mode === "stance_shift" ? session.modeState.stanceShiftApplied || shouldActivateStanceShift(session) : session.modeState.stanceShiftApplied
             }
@@ -586,11 +732,14 @@ export async function POST(request: Request) {
 
           send({
             type: "message_done",
-            draftMessage: { ...response.draftMessage, content: streamedContent },
+            draftMessage: updatedDraft,
             evidenceUsed: response.evidenceUsed,
             provider: response.provider,
             model: response.model,
-            attemptedModels: response.attemptedModels
+            attemptedModels: response.attemptedModels,
+            agentStateMap: session.agentStateMap,
+            userIntentState: session.userIntentState,
+            conversationFocus: session.conversationFocus
           });
           send({ type: "mode_state", modeState: session.modeState });
 
@@ -662,3 +811,5 @@ export async function POST(request: Request) {
     }
   });
 }
+
+

@@ -7,7 +7,16 @@ import { EvidenceSourceCard } from "@/components/evidence-card";
 import { MessageCard } from "@/components/message-card";
 import { defaultAgents } from "@/data/agents";
 import { debateModeMeta, deleteSession, duplicateSession, getSession, updateSession } from "@/lib/session-store";
-import type { DebateActionRequest, DebateMessage, DebateSession, EvidenceCard, JudgeReport, JuryRound, PostmortemReport } from "@/types/debate";
+import type {
+  DebateActionRequest,
+  DebateMessage,
+  DebateSession,
+  EvidenceCard,
+  GeneratedAsset,
+  JudgeReport,
+  JuryRound,
+  PostmortemReport
+} from "@/types/debate";
 
 interface DebateRoomPageProps {
   sessionId: string;
@@ -21,7 +30,7 @@ type StreamEvent =
   | { type: "evidence"; suggestedEvidence: EvidenceCard[]; usedLiveSearch: boolean }
   | { type: "message_start"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string }
   | { type: "message_delta"; delta: string }
-  | { type: "message_done"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string; attemptedModels?: string[] }
+  | { type: "message_done"; draftMessage: DebateMessage; evidenceUsed: string[]; provider?: string; model?: string; attemptedModels?: string[]; agentStateMap: DebateSession["agentStateMap"]; userIntentState?: DebateSession["userIntentState"]; conversationFocus?: string }
   | { type: "analysis_start"; analysisType: "jury" | "judge" | "postmortem"; status: string }
   | { type: "analysis_result"; analysisType: "jury" | "judge" | "postmortem"; result: JuryRound | JudgeReport | PostmortemReport }
   | { type: "session_meta"; title: string; mode: DebateSession["mode"]; updatedAt: string }
@@ -34,11 +43,9 @@ const DEFAULT_INPUT = "Ask the room a question, push on a weak claim, or paste l
 
 function mergeEvidenceCards(current: EvidenceCard[], incoming: EvidenceCard[]): EvidenceCard[] {
   const merged = new Map<string, EvidenceCard>();
-
   for (const item of [...current, ...incoming]) {
     merged.set(item.url, item);
   }
-
   return Array.from(merged.values());
 }
 
@@ -49,13 +56,11 @@ function buildRecentUseRank(messages: DebateMessage[], messageEvidenceMap: Recor
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     const evidenceIds = messageEvidenceMap[message.id] ?? [];
-
     for (const evidenceId of evidenceIds) {
       if (!rank.has(evidenceId)) {
         rank.set(evidenceId, weight);
       }
     }
-
     weight -= 1;
   }
 
@@ -65,6 +70,17 @@ function buildRecentUseRank(messages: DebateMessage[], messageEvidenceMap: Recor
 function extractUrls(text: string): string[] {
   const matches = text.match(/https?:\/\/\S+/g) ?? [];
   return Array.from(new Set(matches.map((item) => item.replace(/[),.;]+$/, ""))));
+}
+
+function buildImagePrompt(session: DebateSession): string {
+  const lastMessages = session.messages.slice(-3).map((message) => `${message.speaker}: ${message.content}`).join("\n");
+  return `Create a clean editorial illustration for the debate \"${session.title}\". Topic: ${session.topic}. Framing: ${session.framing}. Recent exchange: ${lastMessages}`;
+}
+
+function formatSeconds(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
@@ -81,9 +97,23 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [activeSidebarPanel, setActiveSidebarPanel] = useState<SidebarPanel>("evidence");
+  const [uploading, setUploading] = useState(false);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [keepRecordingAsEvidence, setKeepRecordingAsEvidence] = useState(true);
+  const [recordingSupported, setRecordingSupported] = useState(false);
 
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const loaded = getSession(sessionId);
@@ -95,6 +125,8 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
     if (typeof window === "undefined") {
       return;
     }
+
+    setRecordingSupported(typeof window.MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia);
 
     const mediaQuery = window.matchMedia(MOBILE_WIDTH_QUERY);
     const applyMatch = () => setIsMobileViewport(mediaQuery.matches);
@@ -109,11 +141,46 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
     }
   }, [isMobileViewport]);
 
+  useEffect(() => {
+    if (!isRecording) {
+      if (recordingTimerRef.current) {
+        window.clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+      return;
+    }
+
+    recordingTimerRef.current = window.setInterval(() => {
+      setRecordingSeconds((current) => current + 1);
+    }, 1000);
+
+    return () => {
+      if (recordingTimerRef.current) {
+        window.clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    };
+  }, [isRecording]);
+
+  useEffect(() => {
+    return () => {
+      audioRef.current?.pause();
+      audioRef.current = null;
+      mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      if (recordingTimerRef.current) {
+        window.clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, []);
+
   const agentsById = useMemo(() => new Map(defaultAgents.map((agent) => [agent.id, agent])), []);
+  const messagesById = useMemo(() => new Map((session?.messages ?? []).map((message) => [message.id, message])), [session]);
   const participants = useMemo(() => session?.agents.filter((agent) => agent.role !== "user") ?? [], [session]);
   const activeEvidenceById = useMemo(() => new Map((session?.evidence ?? []).map((item) => [item.id, item])), [session]);
   const latestAssistantMessageId = useMemo(() => [...(session?.messages ?? [])].reverse().find((message) => message.role !== "user")?.id ?? null, [session]);
   const detectedUrls = useMemo(() => extractUrls(input), [input]);
+  const generatedImages = useMemo(() => (session?.generatedAssets ?? []).filter((asset) => asset.kind === "image"), [session]);
 
   const latestUsedEvidenceIds = useMemo(() => {
     if (!session) {
@@ -179,7 +246,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
   const latestJury = session?.analysis.juryRounds.at(-1);
   const latestJudge = session?.analysis.judgeReports.at(-1);
   const latestPostmortem = session?.analysis.postmortems.at(-1);
-  const showAnalysisPanel = session ? session.mode !== "classic" || session.analysis.juryRounds.length > 0 || session.analysis.judgeReports.length > 0 || session.analysis.postmortems.length > 0 : false;
+  const showAnalysisPanel = session ? session.mode !== "classic" || session.analysis.juryRounds.length > 0 || session.analysis.judgeReports.length > 0 || session.analysis.postmortems.length > 0 || generatedImages.length > 0 : false;
 
   function commitSession(recipe: (current: DebateSession) => DebateSession, persist = true) {
     setSession((current) => {
@@ -313,7 +380,10 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
               messageEvidenceMap: {
                 ...current.messageEvidenceMap,
                 [event.draftMessage.id]: event.evidenceUsed ?? []
-              }
+              },
+              agentStateMap: event.agentStateMap,
+              userIntentState: event.userIntentState,
+              conversationFocus: event.conversationFocus
             }));
             setSelectedEvidenceId(event.evidenceUsed?.[0] ?? null);
             setEvidenceFilter((event.evidenceUsed?.length ?? 0) > 0 ? "used" : "active");
@@ -397,10 +467,16 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
       speaker: "You",
       role: "user",
       turn: session.messages.length + 1,
-      content: trimmed
+      content: trimmed,
+      intent: "answer_user"
     };
 
-    commitSession((current) => ({ ...current, messages: [...current.messages, optimisticUserMessage] }));
+    commitSession((current) => ({
+      ...current,
+      messages: [...current.messages, optimisticUserMessage],
+      userIntentState: { currentQuestion: trimmed, unansweredPoints: [trimmed] },
+      conversationFocus: trimmed
+    }));
     setLoading(true);
     setStatus(session.settings.enableSearch ? "Searching and grounding sources..." : "Thinking with the current evidence set...");
     setInput("");
@@ -413,6 +489,23 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
       setStreamingMessageId(null);
       setLoading(false);
       setStatus(error instanceof Error ? error.message : "Request failed.");
+    }
+  }
+
+  async function handleAdvanceTurn() {
+    if (!session || loading) {
+      return;
+    }
+
+    setLoading(true);
+    setStatus("Prompting the next debater to answer the latest live claim...");
+    try {
+      await runAction("send_turn");
+    } catch (error) {
+      streamingMessageIdRef.current = null;
+      setStreamingMessageId(null);
+      setLoading(false);
+      setStatus(error instanceof Error ? error.message : "Advance turn failed.");
     }
   }
 
@@ -441,6 +534,212 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
     } catch (error) {
       setLoading(false);
       setStatus(error instanceof Error ? error.message : "Postmortem request failed.");
+    }
+  }
+
+  async function handleUploadFiles(files: FileList | null) {
+    if (!files?.length || !session) {
+      return;
+    }
+
+    setUploading(true);
+    setStatus("Analyzing uploaded evidence...");
+
+    try {
+      const uploaded: EvidenceCard[] = [];
+      for (const file of Array.from(files)) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch("/api/evidence/analyze", {
+          method: "POST",
+          body: formData
+        });
+        const payload = (await response.json()) as { item?: EvidenceCard; error?: string };
+        if (!response.ok || !payload.item) {
+          throw new Error(payload.error || `Failed to analyze ${file.name}.`);
+        }
+        uploaded.push(payload.item);
+      }
+
+      commitSession((current) => ({ ...current, evidence: mergeEvidenceCards(current.evidence, uploaded) }));
+      setSelectedEvidenceId(uploaded[0]?.id ?? null);
+      setEvidenceFilter("active");
+      setStatus(`Added ${uploaded.length} uploaded source${uploaded.length > 1 ? "s" : ""} to the debate.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  async function transcribeRecordedAudio(blob: Blob) {
+    if (!session) {
+      return;
+    }
+
+    setIsTranscribing(true);
+    setStatus("Transcribing your recording...");
+
+    try {
+      const mimeType = blob.type || "audio/webm";
+      const extension = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("wav") ? "wav" : "webm";
+      const file = new File([blob], `voice-note.${extension}`, { type: mimeType });
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/evidence/analyze", {
+        method: "POST",
+        body: formData
+      });
+      const payload = (await response.json()) as { item?: EvidenceCard; error?: string };
+      if (!response.ok || !payload.item) {
+        throw new Error(payload.error || "Audio transcription failed.");
+      }
+
+      const transcriptText = payload.item.transcript?.trim() || payload.item.summary.trim();
+      setInput((current) => (current.trim() ? `${current.trim()}\n\n${transcriptText}` : transcriptText));
+
+      if (keepRecordingAsEvidence) {
+        commitSession((current) => ({ ...current, evidence: mergeEvidenceCards(current.evidence, [payload.item!]) }));
+        setSelectedEvidenceId(payload.item.id);
+        setEvidenceFilter("active");
+        setStatus("Transcribed your recording and added it as audio evidence.");
+      } else {
+        setStatus("Transcribed your recording into the input box.");
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Audio transcription failed.");
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
+
+  async function handleToggleRecording() {
+    if (!recordingSupported) {
+      setStatus("This browser does not support in-browser recording.");
+      return;
+    }
+
+    if (isTranscribing || loading || uploading) {
+      return;
+    }
+
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      setStatus("Finishing recording...");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      recordedChunksRef.current = [];
+      setRecordingSeconds(0);
+
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      });
+
+      recorder.addEventListener("stop", async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        recordedChunksRef.current = [];
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        mediaRecorderRef.current = null;
+
+        if (blob.size < 512) {
+          setStatus("The recording was too short to transcribe.");
+          return;
+        }
+
+        await transcribeRecordedAudio(blob);
+      });
+
+      recorder.start();
+      setIsRecording(true);
+      setStatus("Recording from your microphone...");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Microphone access failed.");
+    }
+  }
+
+  async function handlePlayAudio(message: DebateMessage) {
+    if (message.role === "user") {
+      return;
+    }
+
+    setSpeakingMessageId(message.id);
+    try {
+      const response = await fetch("/api/speech", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ text: message.content, speakerId: message.speakerId })
+      });
+      const payload = (await response.json()) as { audioDataUrl?: string; error?: string; selectedVoice?: string };
+      if (!response.ok || !payload.audioDataUrl) {
+        throw new Error(payload.error || "Speech generation failed.");
+      }
+
+      audioRef.current?.pause();
+      const audio = new Audio(payload.audioDataUrl);
+      audioRef.current = audio;
+      await audio.play();
+      setStatus(`Playing ${message.speaker}'s response with ${payload.selectedVoice ?? "a configured voice"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Speech generation failed.");
+    } finally {
+      setSpeakingMessageId(null);
+    }
+  }
+
+  async function handleGenerateImage() {
+    if (!session) {
+      return;
+    }
+
+    setGeneratingImage(true);
+    setActiveSidebarPanel("analysis");
+    setStatus("Generating a visual summary for this debate...");
+    try {
+      const prompt = buildImagePrompt(session);
+      const response = await fetch("/api/image/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ prompt })
+      });
+      const payload = (await response.json()) as { dataUrl?: string; mimeType?: string; error?: string };
+      if (!response.ok || !payload.dataUrl) {
+        throw new Error(payload.error || "Image generation failed.");
+      }
+
+      const asset: GeneratedAsset = {
+        id: `image-${Date.now().toString(36)}`,
+        kind: "image",
+        prompt,
+        mimeType: payload.mimeType || "image/png",
+        dataUrl: payload.dataUrl,
+        createdAt: new Date().toISOString()
+      };
+
+      commitSession((current) => ({ ...current, generatedAssets: [asset, ...current.generatedAssets] }));
+      setStatus("Visual summary generated.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Image generation failed.");
+    } finally {
+      setGeneratingImage(false);
     }
   }
 
@@ -519,7 +818,10 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
         completedAiTurns: opening ? 1 : 0,
         stanceShiftActive: false,
         stanceShiftApplied: false
-      }
+      },
+      generatedAssets: [],
+      conversationFocus: current.topic,
+      userIntentState: { currentQuestion: current.topic, unansweredPoints: [] }
     }));
     setSelectedEvidenceId(null);
     setEvidenceFilter("used");
@@ -569,6 +871,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
             <span className="eyebrow">{debateModeMeta[session.mode].label}</span>
             <h1 className="debate-title-v2">{session.title}</h1>
             <p className="debate-subtitle-v2">{session.framing}</p>
+            <p className="focus-line-v2">Current focus: {session.conversationFocus ?? session.topic}</p>
           </div>
           <div className="participant-row-v2">
             {participants.map((agent) => (
@@ -582,6 +885,12 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
             <Link href="/" className="ghost ghost-v2">
               Workspace
             </Link>
+            <button className="ghost ghost-v2" type="button" onClick={handleAdvanceTurn} disabled={loading}>
+              Continue debate
+            </button>
+            <button className="ghost ghost-v2" type="button" onClick={handleGenerateImage} disabled={generatingImage || loading}>
+              {generatingImage ? "Generating visual..." : "Generate visual"}
+            </button>
             {session.mode === "networked_judge" ? (
               <button className="ghost ghost-v2" type="button" onClick={handleJudge} disabled={loading}>
                 Ask Judge
@@ -622,9 +931,12 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                       agent={agent}
                       citedEvidence={(session.messageEvidenceMap[message.id] ?? []).map((id) => activeEvidenceById.get(id)).filter(Boolean) as EvidenceCard[]}
                       onEvidenceClick={handleSelectEvidence}
+                      onPlayAudio={handlePlayAudio}
+                      replyTarget={message.replyToMessageId ? messagesById.get(message.replyToMessageId) : undefined}
                       selectedEvidenceId={selectedEvidenceId}
                       isStreaming={message.id === streamingMessageId}
                       isFocused={isFocused}
+                      isAudioLoading={speakingMessageId === message.id}
                     />
                   );
                 })}
@@ -640,21 +952,44 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
-                placeholder="Ask the room a question, paste article/PDF links, and press Ctrl+Enter to send."
+                placeholder="Ask the room a question, paste article/PDF links, speak into the mic, and press Ctrl+Enter to send."
               />
-              <div className="composer-toolbar-v2">
-                <label className={`toggle-pill-v2${session.settings.enableSearch ? " active" : ""}`}>
+              <div className="composer-toolbar-v2 composer-toolbar-v3">
+                <div className="composer-tools-v2">
+                  <label className={`toggle-pill-v2${session.settings.enableSearch ? " active" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={session.settings.enableSearch}
+                      onChange={(event) => commitSession((current) => ({ ...current, settings: { ...current.settings, enableSearch: event.target.checked } }))}
+                    />
+                    <span>Web search</span>
+                  </label>
+                  <button className={`ghost ghost-v2 mic-button-v2${isRecording ? " live" : ""}`} type="button" onClick={handleToggleRecording} disabled={!recordingSupported || isTranscribing || loading || uploading}>
+                    {isRecording ? `Stop recording ${formatSeconds(recordingSeconds)}` : isTranscribing ? "Transcribing..." : "Record voice"}
+                  </button>
+                  <button className="ghost ghost-v2" type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading || loading || isTranscribing}>
+                    {uploading ? "Analyzing upload..." : "Upload evidence"}
+                  </button>
                   <input
-                    type="checkbox"
-                    checked={session.settings.enableSearch}
-                    onChange={(event) => commitSession((current) => ({ ...current, settings: { ...current.settings, enableSearch: event.target.checked } }))}
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*,application/pdf,audio/*"
+                    multiple
+                    hidden
+                    onChange={(event) => void handleUploadFiles(event.target.files)}
                   />
-                  <span>Web search</span>
-                </label>
+                </div>
                 <span className="composer-hint-v2">{debateModeMeta[session.mode].description}</span>
-                <button className="cta cta-v2" type="button" onClick={handleSend} disabled={loading}>
+                <button className="cta cta-v2" type="button" onClick={handleSend} disabled={loading || uploading || isTranscribing}>
                   {loading ? "Working..." : "Send"}
                 </button>
+              </div>
+              <div className="composer-voice-row-v2">
+                <label className={`toggle-pill-v2${keepRecordingAsEvidence ? " active" : ""}`}>
+                  <input type="checkbox" checked={keepRecordingAsEvidence} onChange={(event) => setKeepRecordingAsEvidence(event.target.checked)} />
+                  <span>Keep recording as evidence</span>
+                </label>
+                {!recordingSupported ? <span className="composer-hint-v2">This browser cannot record audio directly.</span> : null}
               </div>
               {detectedUrls.length > 0 ? (
                 <div className="detected-links-v2">
@@ -693,7 +1028,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                   </button>
                 ) : null}
               </div>
-              <p className="evidence-note-v2">Inspect, prune, and validate the sources feeding the current turn and any judge output.</p>
+              <p className="evidence-note-v2">Inspect, prune, and validate the sources feeding the current turn, including uploaded image, PDF, and audio evidence.</p>
               <div className="evidence-tabs-v2">
                 <button className={`tab-v2${evidenceFilter === "used" ? " active" : ""}`} type="button" onClick={() => setEvidenceFilter("used")}>
                   Used this turn
@@ -725,7 +1060,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                         ? "When the model grounds a reply in active sources, they will appear here first."
                         : evidenceFilter === "removed"
                           ? "Removed sources stay here temporarily so you can undo mistakes."
-                          : "Paste a webpage or PDF URL into the message box, or leave Web search on and ask a researchable question."}
+                          : "Paste a webpage or PDF URL into the message box, upload local evidence, or record audio into the composer."}
                     </p>
                   </div>
                 )}
@@ -741,6 +1076,19 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                   </div>
                 </div>
                 <div className="analysis-scroll-v2">
+                  {generatedImages.length > 0 ? (
+                    <article className="analysis-card-v2">
+                      <strong>Generated Visuals</strong>
+                      <div className="generated-image-grid-v2">
+                        {generatedImages.map((asset) => (
+                          <figure key={asset.id} className="generated-image-card-v2">
+                            <img src={asset.dataUrl} alt="Generated debate visual" />
+                            <figcaption>{new Date(asset.createdAt).toLocaleString()}</figcaption>
+                          </figure>
+                        ))}
+                      </div>
+                    </article>
+                  ) : null}
                   {latestJury ? (
                     <article className="analysis-card-v2">
                       <strong>Latest Jury Round</strong>
@@ -757,7 +1105,6 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                       </div>
                     </article>
                   ) : null}
-
                   {latestJudge ? (
                     <article className="analysis-card-v2">
                       <strong>Latest Judge Report</strong>
@@ -768,7 +1115,6 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                       <p><strong>Verdict:</strong> {latestJudge.provisionalVerdict}</p>
                     </article>
                   ) : null}
-
                   {latestPostmortem ? (
                     <article className="analysis-card-v2">
                       <strong>Latest Postmortem</strong>
@@ -786,11 +1132,10 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                       <p><strong>Next prompts:</strong> {latestPostmortem.nextPrompts}</p>
                     </article>
                   ) : null}
-
-                  {!latestJury && !latestJudge && !latestPostmortem ? (
+                  {!latestJury && !latestJudge && !latestPostmortem && generatedImages.length === 0 ? (
                     <div className="empty-analysis-v2">
                       <strong>No analysis yet.</strong>
-                      <p>This panel will populate when the current mode emits jury, judge, or postmortem results.</p>
+                      <p>This panel will populate when the current mode emits jury, judge, or postmortem results, or when you generate visuals.</p>
                     </div>
                   ) : null}
                 </div>

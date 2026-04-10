@@ -5,9 +5,12 @@ interface MessageCardProps {
   agent?: AgentProfile;
   citedEvidence?: EvidenceCard[];
   onEvidenceClick?: (evidenceId: string) => void;
+  onPlayAudio?: (message: DebateMessage) => void;
   selectedEvidenceId?: string | null;
   isStreaming?: boolean;
   isFocused?: boolean;
+  isAudioLoading?: boolean;
+  replyTarget?: DebateMessage;
 }
 
 function getInitials(name: string): string {
@@ -21,7 +24,18 @@ function getInitials(name: string): string {
   );
 }
 
-export function MessageCard({ message, agent, citedEvidence = [], onEvidenceClick, selectedEvidenceId, isStreaming, isFocused }: MessageCardProps) {
+export function MessageCard({
+  message,
+  agent,
+  citedEvidence = [],
+  onEvidenceClick,
+  onPlayAudio,
+  selectedEvidenceId,
+  isStreaming,
+  isFocused,
+  isAudioLoading,
+  replyTarget
+}: MessageCardProps) {
   const accent = message.role === "user" ? "#0f172a" : agent?.color ?? "#0f766e";
 
   return (
@@ -38,8 +52,17 @@ export function MessageCard({ message, agent, citedEvidence = [], onEvidenceClic
               Turn {message.turn} · {message.role}
             </span>
           </div>
-          {agent && message.role !== "user" ? <span className="message-lens-v2">{agent.lens}</span> : null}
+          <div className="message-submeta-v2">
+            {agent && message.role !== "user" ? <span className="message-lens-v2">{agent.lens}</span> : null}
+            {message.intent ? <span className="message-intent-v2">{message.intent.replace(/_/g, " ")}</span> : null}
+            {replyTarget ? <span className="message-reply-v2">Replying to {replyTarget.speaker}</span> : null}
+          </div>
         </div>
+        {message.role !== "user" && onPlayAudio ? (
+          <button className="ghost ghost-v2 audio-button-v2" type="button" onClick={() => onPlayAudio(message)} disabled={isAudioLoading || isStreaming}>
+            {isAudioLoading ? "Rendering voice..." : "Play voice"}
+          </button>
+        ) : null}
       </div>
       <p className="message-text-v2">{message.content || (isStreaming ? " " : "")}</p>
       {isStreaming ? (
@@ -70,3 +93,4 @@ export function MessageCard({ message, agent, citedEvidence = [], onEvidenceClic
     </article>
   );
 }
+

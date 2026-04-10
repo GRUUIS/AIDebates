@@ -1,4 +1,6 @@
 ﻿export type AgentRole = "moderator" | "debater" | "user";
+export type DebateIntent = "answer_user" | "rebut" | "support" | "clarify" | "question" | "synthesize";
+export type RawInputType = "url" | "image" | "pdf" | "audio";
 
 export type MoralLens =
   | "Utilitarian"
@@ -8,8 +10,8 @@ export type MoralLens =
   | "Moderator";
 
 export type DebateMode = "classic" | "jury" | "networked_judge" | "stance_shift" | "postmortem";
-export type EvidenceType = "paper" | "article" | "case-study" | "video" | "image";
-export type EvidenceSourceKind = "search" | "user-url" | "user-pdf";
+export type EvidenceType = "paper" | "article" | "case-study" | "video" | "image" | "audio";
+export type EvidenceSourceKind = "search" | "user-url" | "user-pdf" | "user-image" | "user-audio";
 export type EvidenceCredibility = "high" | "medium" | "low";
 export type EvidenceRetrievalStatus = "ok" | "partial" | "failed";
 
@@ -29,6 +31,7 @@ export interface EvidenceCard {
   title: string;
   type: EvidenceType;
   sourceKind: EvidenceSourceKind;
+  rawInputType: RawInputType;
   summary: string;
   excerpt: string;
   url: string;
@@ -36,6 +39,10 @@ export interface EvidenceCard {
   credibility: EvidenceCredibility;
   retrievalStatus: EvidenceRetrievalStatus;
   usedBy: string;
+  transcript?: string;
+  ocrText?: string;
+  claims?: string[];
+  sourceMeta?: Record<string, string | number | boolean>;
 }
 
 export interface DebateMessage {
@@ -45,6 +52,10 @@ export interface DebateMessage {
   role: AgentRole;
   turn: number;
   content: string;
+  replyToMessageId?: string;
+  targetSpeakerId?: string;
+  intent?: DebateIntent;
+  citations?: string[];
 }
 
 export interface SessionSettings {
@@ -52,6 +63,29 @@ export interface SessionSettings {
   selectedModel?: string;
   maxActiveEvidence?: number;
   juryEnabled?: boolean;
+  autoSpeakResponses?: boolean;
+}
+
+export interface AgentState {
+  currentClaim: string;
+  nextQuestion?: string;
+  opponentFocusId?: string;
+  usedEvidenceIds: string[];
+  recentClaimEmbeddings?: string[];
+}
+
+export interface UserIntentState {
+  currentQuestion?: string;
+  unansweredPoints?: string[];
+}
+
+export interface GeneratedAsset {
+  id: string;
+  kind: "image";
+  prompt: string;
+  mimeType: string;
+  dataUrl: string;
+  createdAt: string;
 }
 
 export interface JurorResult {
@@ -128,6 +162,10 @@ export interface DebateSession {
   analysis: SessionAnalysis;
   modeState: SessionModeState;
   settings: SessionSettings;
+  agentStateMap: Record<string, AgentState>;
+  userIntentState?: UserIntentState;
+  conversationFocus?: string;
+  generatedAssets: GeneratedAsset[];
 }
 
 export interface SessionSummary {
@@ -165,3 +203,4 @@ export interface DebateActionRequest {
   userMessage?: string;
   requestedAction?: "send_turn" | "run_judge" | "run_postmortem";
 }
+

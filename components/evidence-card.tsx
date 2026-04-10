@@ -22,8 +22,18 @@ export function EvidenceSourceCard({ evidence, isHighlighted, isUsedThisTurn, on
         <span>{evidence.type}</span>
         <span>{evidence.sourceKind}</span>
         <span>{evidence.credibility}</span>
+        <span>{evidence.rawInputType}</span>
       </div>
       <p className="source-note-v2">{evidence.summary}</p>
+      {evidence.claims?.length ? (
+        <div className="source-claims-v2">
+          {evidence.claims.slice(0, 3).map((claim) => (
+            <span key={claim}>{claim}</span>
+          ))}
+        </div>
+      ) : null}
+      {evidence.transcript ? <p className="source-detail-v2"><strong>Transcript:</strong> {evidence.transcript.slice(0, 220)}{evidence.transcript.length > 220 ? "..." : ""}</p> : null}
+      {evidence.ocrText ? <p className="source-detail-v2"><strong>OCR:</strong> {evidence.ocrText.slice(0, 180)}{evidence.ocrText.length > 180 ? "..." : ""}</p> : null}
       <p className="source-domain-v2">{evidence.domain}</p>
       <div className="source-actions-v2">
         <button className="link-button-v2" type="button" onClick={() => onSelect?.(evidence.id)}>
@@ -34,10 +44,9 @@ export function EvidenceSourceCard({ evidence, isHighlighted, isUsedThisTurn, on
             Remove
           </button>
         ) : null}
-        <a className="source-link-v2" href={evidence.url} target="_blank" rel="noreferrer">
-          Open source
-        </a>
+        {evidence.url.startsWith("upload://") ? <span className="source-inline-label-v2">Uploaded source</span> : <a className="source-link-v2" href={evidence.url} target="_blank" rel="noreferrer">Open source</a>}
       </div>
     </article>
   );
 }
+

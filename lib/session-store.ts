@@ -1,5 +1,5 @@
 ﻿import { defaultAgents } from "@/data/agents";
-import type { AgentProfile, CreateSessionInput, DebateMessage, DebateMode, DebateSession, SessionSummary } from "@/types/debate";
+import type { AgentProfile, AgentState, CreateSessionInput, DebateMessage, DebateMode, DebateSession, SessionSummary } from "@/types/debate";
 
 const SESSION_INDEX_KEY = "ethics-arena-session-index-v1";
 const SESSION_PREFIX = "ethics-arena-session-v1:";
@@ -80,6 +80,21 @@ function normalizeAgents(agentIds: string[]): AgentProfile[] {
   return withModerator;
 }
 
+function buildAgentStateMap(agents: AgentProfile[]): Record<string, AgentState> {
+  return Object.fromEntries(
+    agents
+      .filter((agent) => agent.role !== "user")
+      .map((agent) => [
+        agent.id,
+        {
+          currentClaim: agent.stance,
+          usedEvidenceIds: [],
+          recentClaimEmbeddings: []
+        } satisfies AgentState
+      ])
+  );
+}
+
 export const debateModeMeta: Record<DebateMode, { label: string; description: string }> = {
   classic: {
     label: "Classic",
@@ -133,8 +148,16 @@ export function createSession(input: CreateSessionInput): DebateSession {
     settings: {
       enableSearch: input.enableSearch ?? true,
       maxActiveEvidence: 8,
-      juryEnabled: input.mode === "jury"
-    }
+      juryEnabled: input.mode === "jury",
+      autoSpeakResponses: false
+    },
+    agentStateMap: buildAgentStateMap(agents),
+    userIntentState: {
+      currentQuestion: input.topic.trim(),
+      unansweredPoints: []
+    },
+    conversationFocus: input.topic.trim(),
+    generatedAssets: []
   };
 
   draft.messages = [openingModeratorMessage(draft)];
@@ -207,22 +230,36 @@ export function duplicateSession(id: string): DebateSession | null {
     return null;
   }
 
+  const idMap = new Map<string, string>();
+  for (const message of session.messages) {
+    idMap.set(message.id, createId("msg"));
+  }
+
   const copy: DebateSession = {
     ...session,
     id: createId("session"),
     title: `${session.title} Copy`,
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    messages: session.messages.map((message) => ({ ...message, id: createId("msg") })),
+    messages: session.messages.map((message) => ({
+      ...message,
+      id: idMap.get(message.id) ?? createId("msg"),
+      replyToMessageId: message.replyToMessageId ? idMap.get(message.replyToMessageId) : undefined
+    })),
     evidence: [...session.evidence],
     removedEvidence: [...session.removedEvidence],
-    messageEvidenceMap: { ...session.messageEvidenceMap },
+    messageEvidenceMap: Object.fromEntries(
+      Object.entries(session.messageEvidenceMap).map(([messageId, evidenceIds]) => [idMap.get(messageId) ?? messageId, [...evidenceIds]])
+    ),
     analysis: {
       juryRounds: [...session.analysis.juryRounds],
       judgeReports: [...session.analysis.judgeReports],
       postmortems: [...session.analysis.postmortems]
     },
-    modeState: { ...session.modeState }
+    modeState: { ...session.modeState },
+    agentStateMap: structuredClone(session.agentStateMap),
+    userIntentState: session.userIntentState ? structuredClone(session.userIntentState) : undefined,
+    generatedAssets: [...session.generatedAssets]
   };
 
   return saveSession(copy);
@@ -239,3 +276,4 @@ export function ensureStarterSession(): DebateSession {
 
   return createStarterSession();
 }
+
