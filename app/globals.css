@@ -1561,3 +1561,111 @@ select {
     align-items: stretch;
   }
 }
+
+/* ── Dark mode ── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1117;
+    --panel: rgba(30, 34, 44, 0.92);
+    --panel-strong: #1e222c;
+    --ink: #e2e8f0;
+    --muted: #94a3b8;
+    --line: rgba(226, 232, 240, 0.08);
+    --accent: #2dd4bf;
+    --accent-soft: rgba(45, 212, 191, 0.14);
+    --warn: #fbbf24;
+    --user: #e2e8f0;
+    --shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+  }
+
+  body {
+    background:
+      radial-gradient(circle at top left, rgba(45, 212, 191, 0.06), transparent 24%),
+      radial-gradient(circle at bottom right, rgba(59, 130, 246, 0.04), transparent 28%),
+      linear-gradient(180deg, #0f1117 0%, #161a24 100%);
+  }
+
+  .hero-card,
+  .panel,
+  .workspace-card-v2,
+  .mode-card-v2,
+  .agent-picker-card-v2,
+  .source-card-v2,
+  .analysis-card-v2,
+  .composer-v2,
+  .evidence-rail-v2,
+  .analysis-rail-v2 {
+    background: var(--panel);
+    border-color: var(--line);
+  }
+
+  .cta {
+    background: var(--accent);
+    color: #0f1117;
+  }
+
+  .ghost {
+    border-color: var(--line);
+    color: var(--muted);
+  }
+
+  .ghost:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  textarea,
+  input[type="text"] {
+    background: var(--panel-strong);
+    color: var(--ink);
+    border-color: var(--line);
+  }
+
+  .status-bar-v2 {
+    background: var(--panel-strong);
+    color: var(--muted);
+  }
+
+  .pill {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .tab-v2.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .kpi {
+    background: var(--panel-strong);
+  }
+
+  .message-bubble-v2 {
+    background: var(--panel-strong);
+    border-color: var(--line);
+  }
+
+  .participant-chip-v2 {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .link-chip-v2 {
+    background: var(--panel-strong);
+    color: var(--accent);
+  }
+
+  .workspace-mode-v2 {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .toggle-pill-v2 {
+    background: var(--panel-strong);
+    color: var(--muted);
+  }
+
+  .toggle-pill-v2.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}

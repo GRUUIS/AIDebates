@@ -744,7 +744,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
   }
 
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void handleSend();
     }
@@ -836,6 +836,18 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
     }
   }
 
+  function handleExportSession() {
+    if (!session) return;
+    const blob = new Blob([JSON.stringify(session, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${session.title.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_${session.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus("Session exported as JSON.");
+  }
+
   function handleDeleteSession() {
     deleteSession(sessionId);
     router.push("/");
@@ -907,6 +919,9 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
             <button className="ghost ghost-v2" type="button" onClick={handleResetConversation}>
               Reset conversation
             </button>
+            <button className="ghost ghost-v2" type="button" onClick={handleExportSession}>
+              Export
+            </button>
             <button className="ghost ghost-v2 danger-ghost-v2" type="button" onClick={handleDeleteSession}>
               Delete
             </button>
@@ -952,7 +967,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
-                placeholder="Ask the room a question, paste article/PDF links, speak into the mic, and press Ctrl+Enter to send."
+                placeholder="Ask the room a question, paste article/PDF links, speak into the mic, and press Enter to send."
               />
               <div className="composer-toolbar-v2 composer-toolbar-v3">
                 <div className="composer-tools-v2">

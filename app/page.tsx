@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { FeatureCard } from "@/components/feature-card";
-import { createStarterSession, debateModeMeta, deleteSession, duplicateSession, ensureStarterSession, listSessions } from "@/lib/session-store";
+import { createStarterSession, debateModeMeta, deleteSession, duplicateSession, ensureStarterSession, getSession, listSessions } from "@/lib/session-store";
 import type { SessionSummary } from "@/types/debate";
 
 const features = [
@@ -53,6 +53,18 @@ export default function HomePage() {
   function handleDuplicate(sessionId: string) {
     duplicateSession(sessionId);
     refresh();
+  }
+
+  function handleExport(sessionId: string) {
+    const session = getSession(sessionId);
+    if (!session) return;
+    const blob = new Blob([JSON.stringify(session, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${session.title.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}_${session.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -134,6 +146,9 @@ export default function HomePage() {
                     </Link>
                     <button className="ghost ghost-small-v2" type="button" onClick={() => handleDuplicate(session.id)}>
                       Duplicate
+                    </button>
+                    <button className="ghost ghost-small-v2" type="button" onClick={() => handleExport(session.id)}>
+                      Export
                     </button>
                     <button className="ghost ghost-small-v2 danger-ghost-v2" type="button" onClick={() => handleDelete(session.id)}>
                       Delete
