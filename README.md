@@ -7,7 +7,7 @@ A multi-agent AI debate chatroom prototype for moral and ethical dilemmas.
 - Next.js
 - React
 - TypeScript
-- Vertex AI Express Mode
+- Vertex AI Express Mode / OpenRouter (configurable)
 
 ## Requirements
 
@@ -22,7 +22,9 @@ A multi-agent AI debate chatroom prototype for moral and ethical dilemmas.
 npm install
 ```
 
-2. Fill local environment variables in `.env.local`:
+2. Fill local environment variables in `.env.local` (pick ONE LLM provider option below):
+
+### Option A: Vertex AI Express Mode
 
 ```env
 VERTEX_USE_EXPRESS_MODE=true
@@ -34,7 +36,25 @@ VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 SEARCH_API_KEY=your_tavily_api_key_here
 ```
 
-The API route will prefer Vertex AI Express Mode when `VERTEX_USE_EXPRESS_MODE=true` and `GOOGLE_API_KEY` is present. Search still uses Tavily in the current migration phase.
+### Option B: OpenRouter
+
+```env
+# Disable Vertex, or leave it enabled but omit GOOGLE_API_KEY.
+VERTEX_USE_EXPRESS_MODE=false
+
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=deepseek/deepseek-v3.2
+
+SEARCH_API_KEY=your_tavily_api_key_here
+```
+
+Provider precedence in code (`lib/llm.ts`):
+- Vertex (when `VERTEX_USE_EXPRESS_MODE=true` and `GOOGLE_API_KEY` is present)
+- OpenRouter (when `OPENROUTER_API_KEY` is present)
+- OpenAI (when `OPENAI_API_KEY` is present)
+
+Search still uses Tavily in the current migration phase.
 Get search key here: https://www.tavily.com/
 
 3. Start the development server:
