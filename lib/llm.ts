@@ -29,11 +29,9 @@ export function getLlmConfig(): LlmConfig | null {
       models: unique([
         process.env.OPENROUTER_MODEL || process.env.OPENAI_MODEL || "openai/gpt-4o-mini",
         ...parseModelList(process.env.OPENROUTER_FALLBACK_MODELS),
-        "openai/gpt-4o-mini",
-        "anthropic/claude-3.5-haiku",
-        "google/gemini-2.0-flash-001"
+        "openai/gpt-4o-mini"
       ]),
-      baseURL: "https://openrouter.ai/api/v1",
+      baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
       defaultHeaders: {
         ...(process.env.OPENROUTER_SITE_URL ? { "HTTP-Referer": process.env.OPENROUTER_SITE_URL } : {}),
         ...(process.env.OPENROUTER_APP_NAME ? { "X-Title": process.env.OPENROUTER_APP_NAME } : {})
@@ -45,7 +43,8 @@ export function getLlmConfig(): LlmConfig | null {
     return {
       provider: "openai",
       apiKey: process.env.OPENAI_API_KEY,
-      models: unique([process.env.OPENAI_MODEL || "gpt-4.1-mini", "gpt-4o-mini"])
+      models: unique([process.env.OPENAI_MODEL || "gpt-4o-mini", "gpt-4o-mini"]),
+      baseURL: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1"
     };
   }
 
@@ -110,7 +109,7 @@ export async function callJsonChatCompletion(params: {
     throw new Error("No live model configuration available.");
   }
 
-  const response = await fetch(`${config.baseURL ?? "https://api.openai.com/v1"}/chat/completions`, {
+  const response = await fetch(`${config.baseURL}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.apiKey}`,

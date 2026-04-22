@@ -264,6 +264,23 @@ function shouldActivateStanceShift(session: DebateSession): boolean {
   return session.mode === "stance_shift" && !session.modeState.stanceShiftApplied && countAiTurns(session) >= 4;
 }
 
+function shouldStopForHumanTurn(session: DebateSession): boolean {
+  // If mode is human_vs_ai, we want to pause and wait for the human instead of having AI automatically continue.
+  // We'll let the AI respond to the human, and then stop so the human can reply again.
+  if (session.mode !== "human_vs_ai") {
+    return false;
+  }
+  
+  if (session.messages.length === 0) {
+    return false;
+  }
+  
+  const lastMessage = session.messages[session.messages.length - 1];
+  // If the last message was NOT from a user, we should stop and wait for the human.
+  // This means the AI just took its turn, so now it's the human's turn.
+  return lastMessage.role !== "user";
+}
+
 async function resolveEvidence(session: DebateSession, userMessage?: string): Promise<{ mergedEvidence: EvidenceCard[]; liveEvidence: EvidenceCard[] }> {
   const importedFromMessage = await Promise.all((userMessage?.match(/https?:\/\/\S+/g) ?? []).map((url) => importEvidenceFromUrl(url.replace(/[),.;]+$/, ""))));
 
@@ -662,6 +679,14 @@ export async function POST(request: Request) {
           send({ type: "status", status: body?.userMessage?.trim() ? "Checking pasted links, uploads, and preparing sources..." : "Advancing the internal exchange with the current evidence set..." });
           session = appendUserMessage(session, body?.userMessage);
           session = updateUserIntentState(session, body?.userMessage);
+          
+          if (shouldStopForHumanTurn(session)) {
+             send({ type: "status", status: "Waiting for human turn..." });
+             send({ type: "done", suggestedEvidence: session.evidence, usedLiveSearch: false, attemptedModels: [] });
+             controller.close();
+             return;
+          }
+
           send({ type: "status", status: session.settings.enableSearch && body?.userMessage?.trim() ? "Searching Tavily for supporting evidence..." : "Selecting the best current evidence..." });
 
           const { mergedEvidence, liveEvidence } = await resolveEvidence(session, body?.userMessage);

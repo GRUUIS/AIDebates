@@ -97,24 +97,28 @@ function buildAgentStateMap(agents: AgentProfile[]): Record<string, AgentState> 
 
 export const debateModeMeta: Record<DebateMode, { label: string; description: string }> = {
   classic: {
-    label: "Classic",
-    description: "Baseline moderator-led debate with the current multi-agent flow."
+    label: "Classic Debate",
+    description: "Agents take structured turns arguing their philosophical lenses."
   },
   jury: {
-    label: "Jury",
-    description: "Adds a three-model jury panel after each AI turn."
+    label: "Jury Simulation",
+    description: "After the debate, a simulated jury breaks down how different demographics respond."
   },
   networked_judge: {
     label: "Networked Judge",
-    description: "Adds a fact-checking judge that can search for supporting or missing evidence."
+    description: "An AI judge observes arguments, tracks logic, and provides a final verdict."
   },
   stance_shift: {
-    label: "Stance Shift",
-    description: "Triggers a later steelman phase where key debaters argue the opposite side."
+    label: "Stance Shift Evaluation",
+    description: "A pre- and post-debate check of simulated participant opinion shifts."
   },
   postmortem: {
-    label: "Postmortem",
-    description: "Optimized for an end-of-debate scorecard and structured retrospective."
+    label: "Postmortem Analytics",
+    description: "Analyze logical fallacies, emotional appeals, and key turning points of a past session."
+  },
+  human_vs_ai: {
+    label: "Human vs AI",
+    description: "You debate directly against an active AI agent."
   }
 };
 

@@ -7,9 +7,12 @@ export type MoralLens =
   | "Deontological"
   | "Virtue Ethics"
   | "Policy Pragmatist"
-  | "Moderator";
+  | "Moderator"
+  | "Stoic Guardian"
+  | "Survival Pragmatist"
+  | "Arcane Lifter";
 
-export type DebateMode = "classic" | "jury" | "networked_judge" | "stance_shift" | "postmortem";
+export type DebateMode = "classic" | "jury" | "networked_judge" | "stance_shift" | "postmortem" | "human_vs_ai";
 export type EvidenceType = "paper" | "article" | "case-study" | "video" | "image" | "audio";
 export type EvidenceSourceKind = "search" | "user-url" | "user-pdf" | "user-image" | "user-audio";
 export type EvidenceCredibility = "high" | "medium" | "low";
@@ -24,6 +27,7 @@ export interface AgentProfile {
   style: string;
   constraints: string[];
   color: string;
+  personality?: string[];
 }
 
 export interface EvidenceCard {

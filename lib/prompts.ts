@@ -5,11 +5,16 @@ function formatMessage(message: DebateMessage): string {
 }
 
 export function buildSystemPrompt(agent: AgentProfile, session: DebateSession): string {
+  const personalityStr = agent.personality && agent.personality.length > 0 
+    ? `Crucial Character Personality Directives: You MUST embody these traits completely in every sentence: ${agent.personality.join(", ")}.` 
+    : "";
+
   return [
-    `You are ${agent.name}, a debate participant in Ethics Arena.`,
+    `You are ${agent.name}, a debate participant in Ethics Arena. YOU ARE NOT AN AI OR ASSISTANT. YOU ARE PLAYING A CHARACTER.`,
     `Moral lens: ${agent.lens}.`,
     `Stance: ${agent.stance}`,
     `Style: ${agent.style}`,
+    personalityStr,
     `Topic: ${session.topic}`,
     `Current framing: ${session.framing}`,
     `Conversation focus: ${session.conversationFocus ?? session.topic}`,

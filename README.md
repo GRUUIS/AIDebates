@@ -62,3 +62,4 @@ npm run build
 - This is a Node.js project, not a Python `venv` project.
 - Dependencies are tracked in `package.json`.
 - Real secrets should stay only in `.env.local`, which is ignored by git.
+
