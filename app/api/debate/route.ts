@@ -1,7 +1,7 @@
 ﻿import { defaultAgents } from "@/data/agents";
 import { dedupeEvidence, findOpposingEvidence, findRelevantEvidence, findSimilarClaims, indexClaimText } from "@/lib/embeddings";
 import { importEvidenceFromUrl, mergeEvidence, searchEvidence } from "@/lib/evidence";
-import { getClient, getLlmConfig } from "@/lib/llm";
+import { generateStructuredObject, getLlmConfig } from "@/lib/llm";
 import { createMockDebateResponse } from "@/lib/mock-debate";
 import { buildModeratorInstruction, buildRelevantTranscript, buildSystemPrompt, describeIntent } from "@/lib/prompts";
 import type {
@@ -20,7 +20,14 @@ import type {
   UserIntentState
 } from "@/types/debate";
 
-const JURY_MODELS = ["openai/gpt-4o-mini", "anthropic/claude-3.5-haiku", "google/gemini-2.0-flash-001"];
+function getJuryModels(): string[] {
+  const config = getLlmConfig();
+  if (config?.provider === "vertex") {
+    return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash"];
+  }
+
+  return ["openai/gpt-4o-mini", "anthropic/claude-3.5-haiku", "google/gemini-2.0-flash-001"];
+}
 
 interface TurnPlan {
   nextSpeakerId: string;
@@ -349,14 +356,14 @@ async function buildPlannerHints(session: DebateSession, userMessage?: string) {
   };
 }
 
-async function planTurn(client: ReturnType<typeof getClient>, model: string, session: DebateSession, userMessage?: string): Promise<TurnPlan> {
+async function planTurn(model: string, session: DebateSession, userMessage?: string): Promise<TurnPlan> {
   const moderatorInstructions = buildModeratorInstruction(session);
   const stanceShiftDirective = shouldActivateStanceShift(session)
     ? `Stance shift is active. Prefer choosing one of these debaters next: ${(session.modeState.switchedAgentIds ?? ["utilitarian", "deontologist"]).join(", ")}.`
     : "";
   const hints = await buildPlannerHints(session, userMessage);
 
-  const response = await client.responses.create({
+  const response = await generateStructuredObject({
     model,
     instructions: [
       "You plan the next turn in a multi-agent ethics debate.",
@@ -370,7 +377,7 @@ async function planTurn(client: ReturnType<typeof getClient>, model: string, ses
       "Choose only evidence ids that are already available.",
       "Prefer strong evidence cards with retrievalStatus ok or partial. Ignore failed evidence unless explicitly discussing the lack of evidence.",
       "If the evidence is weak, set needsMoreEvidence to true and make the moderator instruction request better sourcing.",
-      "Use only the JSON schema requested in text.format."
+      "Return only JSON that matches the supplied schema."
     ].filter(Boolean).join("\n\n"),
     input: [
       `Topic: ${session.topic}`,
@@ -389,17 +396,10 @@ async function planTurn(client: ReturnType<typeof getClient>, model: string, ses
       buildEvidenceDigest(hints.candidateEvidence),
       `Heuristic claim to answer: ${hints.claimToAnswer}`
     ].join("\n\n"),
-    text: {
-      format: {
-        type: "json_schema",
-        name: "debate_turn_plan",
-        schema: plannerSchema,
-        strict: true
-      }
-    }
+    schema: plannerSchema
   });
 
-  const parsed = JSON.parse(response.output_text) as TurnPlan;
+  const parsed = JSON.parse(response) as TurnPlan;
   return {
     ...parsed,
     intent: parsed.intent ?? hints.intent,
@@ -411,14 +411,14 @@ async function planTurn(client: ReturnType<typeof getClient>, model: string, ses
   };
 }
 
-async function generateSpeakerTurn(client: ReturnType<typeof getClient>, model: string, session: DebateSession, plan: TurnPlan): Promise<GeneratedTurn> {
+async function generateSpeakerTurn(model: string, session: DebateSession, plan: TurnPlan): Promise<GeneratedTurn> {
   const speaker = session.agents.find((agent) => agent.id === plan.nextSpeakerId) ?? defaultAgents[0];
   const selectedEvidence = session.evidence.filter((item) => plan.evidenceIds.includes(item.id));
   const replyTarget = plan.replyToMessageId ? session.messages.find((message) => message.id === plan.replyToMessageId) : undefined;
   const stanceShiftActive = shouldActivateStanceShift(session) && (session.modeState.switchedAgentIds ?? []).includes(speaker.id);
   const recentSimilarClaims = await findSimilarClaims(session.agentStateMap[speaker.id]?.currentClaim ?? speaker.stance, session.messages, 3, replyTarget?.id);
 
-  const response = await client.responses.create({
+  const response = await generateStructuredObject({
     model,
     instructions: [
       buildSystemPrompt(speaker, session),
@@ -443,17 +443,10 @@ async function generateSpeakerTurn(client: ReturnType<typeof getClient>, model: 
       buildEvidenceDigest(selectedEvidence),
       "Write the next speaker's reply now."
     ].join("\n\n"),
-    text: {
-      format: {
-        type: "json_schema",
-        name: "generated_turn",
-        schema: generatedTurnSchema,
-        strict: true
-      }
-    }
+    schema: generatedTurnSchema
   });
 
-  return JSON.parse(response.output_text) as GeneratedTurn;
+  return JSON.parse(response) as GeneratedTurn;
 }
 
 async function generateDebateResponse(session: DebateSession, userMessage?: string): Promise<DebateResponse & { provider?: string; model?: string; usedLiveModel?: boolean; privateStateUpdate?: AgentState; conversationFocus?: string; userIntentState?: UserIntentState }> {
@@ -468,7 +461,6 @@ async function generateDebateResponse(session: DebateSession, userMessage?: stri
     };
   }
 
-  const client = getClient(config);
   const attemptedModels: string[] = [];
   let lastError: unknown = null;
 
@@ -476,9 +468,9 @@ async function generateDebateResponse(session: DebateSession, userMessage?: stri
     attemptedModels.push(model);
 
     try {
-      const plan = await planTurn(client, model, session, userMessage);
+      const plan = await planTurn(model, session, userMessage);
       const speaker = session.agents.find((agent) => agent.id === plan.nextSpeakerId) ?? defaultAgents[0];
-      const turn = await generateSpeakerTurn(client, model, session, plan);
+      const turn = await generateSpeakerTurn(model, session, plan);
 
       return {
         nextSpeakerId: speaker.id,
@@ -523,30 +515,24 @@ async function generateDebateResponse(session: DebateSession, userMessage?: stri
     usedLiveModel: false
   };
 }
-async function runJury(client: ReturnType<typeof getClient>, session: DebateSession): Promise<JuryRound> {
+async function runJury(session: DebateSession): Promise<JuryRound> {
   const jurors = await Promise.all(
-    JURY_MODELS.map(async (model) => {
+    getJuryModels().map(async (model, index) => {
       try {
-        const response = await client.responses.create({
+        const response = await generateStructuredObject({
           model,
           instructions: [
             "You are a juror evaluating an AI debate.",
             "Choose the current winner, explain why, and provide a 0-100 confidence score.",
             "Use only the supplied transcript and evidence digest.",
-            "Return only JSON matching the schema."
+            "Return only JSON matching the schema.",
+            `Juror perspective variant: ${index + 1}. Keep the verdict independent and fair.`
           ].join("\n\n"),
           input: ["Transcript:", buildTranscript(session), "Evidence:", buildEvidenceDigest(session.evidence)].join("\n\n"),
-          text: {
-            format: {
-              type: "json_schema",
-              name: "jury_vote",
-              schema: jurySchema,
-              strict: true
-            }
-          }
+          schema: jurySchema
         });
 
-        const parsed = JSON.parse(response.output_text) as Omit<JurorResult, "jurorModel">;
+        const parsed = JSON.parse(response) as Omit<JurorResult, "jurorModel">;
         return { jurorModel: model, ...parsed } satisfies JurorResult;
       } catch {
         return {
@@ -574,12 +560,12 @@ async function runJury(client: ReturnType<typeof getClient>, session: DebateSess
   };
 }
 
-async function runJudge(client: ReturnType<typeof getClient>, session: DebateSession): Promise<{ report: JudgeReport; suggestedEvidence: EvidenceCard[] }> {
+async function runJudge(session: DebateSession): Promise<{ report: JudgeReport; suggestedEvidence: EvidenceCard[] }> {
   const judgeQuery = `${session.topic} ${session.messages.slice(-3).map((message) => message.content).join(" ")}`;
   const judgeEvidence = await searchEvidence(judgeQuery, session.topic).catch(() => [] as EvidenceCard[]);
   const evidence = mergeEvidence(session.evidence, judgeEvidence).slice(0, session.settings.maxActiveEvidence ?? 8);
 
-  const response = await client.responses.create({
+  const response = await generateStructuredObject({
     model: getLlmConfig()?.models[0] ?? "gpt-4o-mini",
     instructions: [
       "You are a networked judge for an AI ethics debate.",
@@ -587,17 +573,10 @@ async function runJudge(client: ReturnType<typeof getClient>, session: DebateSes
       "Return only JSON matching the schema."
     ].join("\n\n"),
     input: ["Transcript:", buildTranscript(session), "Evidence:", buildEvidenceDigest(evidence)].join("\n\n"),
-    text: {
-      format: {
-        type: "json_schema",
-        name: "judge_report",
-        schema: judgeSchema,
-        strict: true
-      }
-    }
+    schema: judgeSchema
   });
 
-  const parsed = JSON.parse(response.output_text) as Omit<JudgeReport, "id" | "createdAt">;
+  const parsed = JSON.parse(response) as Omit<JudgeReport, "id" | "createdAt">;
   return {
     suggestedEvidence: evidence,
     report: {
@@ -608,8 +587,8 @@ async function runJudge(client: ReturnType<typeof getClient>, session: DebateSes
   };
 }
 
-async function runPostmortem(client: ReturnType<typeof getClient>, session: DebateSession): Promise<PostmortemReport> {
-  const response = await client.responses.create({
+async function runPostmortem(session: DebateSession): Promise<PostmortemReport> {
+  const response = await generateStructuredObject({
     model: getLlmConfig()?.models[0] ?? "gpt-4o-mini",
     instructions: [
       "You are writing a structured postmortem for an AI debate.",
@@ -617,17 +596,10 @@ async function runPostmortem(client: ReturnType<typeof getClient>, session: Deba
       "Return only JSON matching the schema."
     ].join("\n\n"),
     input: ["Transcript:", buildTranscript(session), "Evidence:", buildEvidenceDigest(session.evidence)].join("\n\n"),
-    text: {
-      format: {
-        type: "json_schema",
-        name: "postmortem_report",
-        schema: postmortemSchema,
-        strict: true
-      }
-    }
+    schema: postmortemSchema
   });
 
-  const parsed = JSON.parse(response.output_text) as Omit<PostmortemReport, "id" | "createdAt"> & { scorecard: PostmortemScorecard };
+  const parsed = JSON.parse(response) as Omit<PostmortemReport, "id" | "createdAt"> & { scorecard: PostmortemScorecard };
   return {
     id: createId("postmortem"),
     createdAt: nowIso(),
@@ -669,7 +641,7 @@ export async function POST(request: Request) {
 
       try {
         const config = getLlmConfig();
-        const client = config ? getClient(config) : null;
+        const hasLiveModel = Boolean(config);
         let session = ensureSessionDefaults({ ...baseSession, updatedAt: nowIso() });
         const requestedAction = body?.requestedAction ?? "send_turn";
 
@@ -768,17 +740,17 @@ export async function POST(request: Request) {
           });
           send({ type: "mode_state", modeState: session.modeState });
 
-          if (client && session.mode === "jury") {
+          if (hasLiveModel && session.mode === "jury") {
             send({ type: "analysis_start", analysisType: "jury", status: "Gathering jury votes across models..." });
-            const juryRound = await runJury(client, session);
+            const juryRound = await runJury(session);
             send({ type: "analysis_result", analysisType: "jury", result: juryRound });
             session = { ...session, analysis: { ...session.analysis, juryRounds: [...session.analysis.juryRounds, juryRound] }, modeState: { ...session.modeState, lastAnalysisType: "jury" } };
             send({ type: "mode_state", modeState: session.modeState });
           }
 
-          if (client && session.mode === "networked_judge") {
+          if (hasLiveModel && session.mode === "networked_judge") {
             send({ type: "analysis_start", analysisType: "judge", status: "Running the networked judge..." });
-            const judge = await runJudge(client, session);
+            const judge = await runJudge(session);
             session = { ...session, evidence: judge.suggestedEvidence, analysis: { ...session.analysis, judgeReports: [...session.analysis.judgeReports, judge.report] }, modeState: { ...session.modeState, lastAnalysisType: "judge" } };
             send({ type: "evidence", suggestedEvidence: judge.suggestedEvidence, usedLiveSearch: true });
             send({ type: "analysis_result", analysisType: "judge", result: judge.report });
@@ -791,7 +763,7 @@ export async function POST(request: Request) {
           return;
         }
 
-        if (!client) {
+        if (!hasLiveModel) {
           send({ type: "error", error: "A live model is required for this action.", suggestedEvidence: session.evidence });
           controller.close();
           return;
@@ -799,7 +771,7 @@ export async function POST(request: Request) {
 
         if (requestedAction === "run_judge") {
           send({ type: "analysis_start", analysisType: "judge", status: "Running the networked judge..." });
-          const judge = await runJudge(client, session);
+          const judge = await runJudge(session);
           session = { ...session, evidence: judge.suggestedEvidence, analysis: { ...session.analysis, judgeReports: [...session.analysis.judgeReports, judge.report] }, modeState: { ...session.modeState, lastAnalysisType: "judge" } };
           send({ type: "evidence", suggestedEvidence: judge.suggestedEvidence, usedLiveSearch: true });
           send({ type: "analysis_result", analysisType: "judge", result: judge.report });
@@ -810,7 +782,7 @@ export async function POST(request: Request) {
         }
 
         send({ type: "analysis_start", analysisType: "postmortem", status: "Generating debate postmortem..." });
-        const postmortem = await runPostmortem(client, session);
+        const postmortem = await runPostmortem(session);
         session = { ...session, analysis: { ...session.analysis, postmortems: [...session.analysis.postmortems, postmortem] }, modeState: { ...session.modeState, lastAnalysisType: "postmortem" } };
         send({ type: "analysis_result", analysisType: "postmortem", result: postmortem });
         send({ type: "mode_state", modeState: session.modeState });

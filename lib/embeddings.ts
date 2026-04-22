@@ -2,7 +2,7 @@
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import type { DebateMessage, EvidenceCard } from "@/types/debate";
-import { getClient, getLlmConfig, getPreferredModel } from "@/lib/llm";
+import { createEmbedding, getLlmConfig } from "@/lib/llm";
 
 interface EmbeddingRecord {
   id: string;
@@ -89,13 +89,8 @@ export async function embedText(input: string): Promise<number[]> {
   }
 
   try {
-    const client = getClient(config);
-    const response = await client.embeddings.create({
-      model: getPreferredModel("embedding"),
-      input: text
-    });
-
-    return response.data[0]?.embedding ?? ZERO_VECTOR;
+    const embedding = await createEmbedding(text);
+    return embedding.length ? embedding : ZERO_VECTOR;
   } catch {
     return ZERO_VECTOR;
   }

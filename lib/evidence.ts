@@ -3,7 +3,7 @@ import { Readability } from "@mozilla/readability";
 import { createHash } from "node:crypto";
 import type { EvidenceCard, EvidenceCredibility, EvidenceSourceKind, EvidenceType, RawInputType } from "@/types/debate";
 import { indexEvidenceCard } from "@/lib/embeddings";
-import { callJsonChatCompletion, getClient, getLlmConfig, getPreferredModel } from "@/lib/llm";
+import { callJsonChatCompletion, getPreferredModel } from "@/lib/llm";
 
 interface TavilyResult {
   title?: string;

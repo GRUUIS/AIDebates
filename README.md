@@ -7,7 +7,7 @@ A multi-agent AI debate chatroom prototype for moral and ethical dilemmas.
 - Next.js
 - React
 - TypeScript
-- OpenAI API / OpenRouter
+- Vertex AI Express Mode
 
 ## Requirements
 
@@ -25,16 +25,16 @@ npm install
 2. Fill local environment variables in `.env.local`:
 
 ```env
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-OPENROUTER_MODEL=openai/gpt-5.4-mini
-OPENROUTER_SITE_URL=http://localhost:3000
-OPENROUTER_APP_NAME=Ethics Arena
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4.1-mini
+VERTEX_USE_EXPRESS_MODE=true
+GOOGLE_API_KEY=your_vertex_express_api_key_here
+VERTEX_MODEL=gemini-2.5-flash
+VERTEX_FALLBACK_MODELS=gemini-2.5-pro
+VERTEX_MULTIMODAL_MODEL=gemini-2.5-flash
+VERTEX_EMBEDDING_MODEL=gemini-embedding-001
 SEARCH_API_KEY=your_tavily_api_key_here
 ```
 
-The API route will prefer OpenRouter when `OPENROUTER_API_KEY` is present, and otherwise fall back to direct OpenAI usage via `OPENAI_API_KEY`.
+The API route will prefer Vertex AI Express Mode when `VERTEX_USE_EXPRESS_MODE=true` and `GOOGLE_API_KEY` is present. Search still uses Tavily in the current migration phase.
 Get search key here: https://www.tavily.com/
 
 3. Start the development server:
@@ -54,7 +54,7 @@ npm run build
 - Home page prototype
 - Debate room prototype
 - Mock debate flow
-- OpenAI/OpenRouter-backed `/api/debate` route with mock fallback
+- Vertex-backed `/api/debate` route with mock fallback
 - Local project-specific skill drafts
 
 ## Notes
