@@ -81,7 +81,7 @@ export function getLlmConfig(): LlmConfig | null {
   return null;
 }
 
-export function getPreferredModel(kind: "chat" | "multimodal" | "embedding" | "speech" | "image" = "chat"): string {
+export function getPreferredModel(kind: "chat" | "multimodal" | "embedding" | "image" = "chat"): string {
   const config = getLlmConfig();
   if (!config) {
     return kind === "embedding" ? "text-embedding-3-small" : "gpt-4o-mini";
@@ -93,11 +93,9 @@ export function getPreferredModel(kind: "chat" | "multimodal" | "embedding" | "s
         ? process.env.VERTEX_MULTIMODAL_MODEL
         : kind === "embedding"
           ? process.env.VERTEX_EMBEDDING_MODEL
-          : kind === "speech"
-            ? process.env.VERTEX_SPEECH_MODEL
-            : kind === "image"
-              ? process.env.VERTEX_IMAGE_MODEL
-              : undefined;
+          : kind === "image"
+            ? process.env.VERTEX_IMAGE_MODEL
+            : undefined;
 
     if (envModel?.trim()) {
       return envModel.trim();
@@ -107,12 +105,8 @@ export function getPreferredModel(kind: "chat" | "multimodal" | "embedding" | "s
       return "gemini-embedding-001";
     }
 
-    if (kind === "speech") {
-      return "gemini-2.5-flash-preview-tts";
-    }
-
     if (kind === "image") {
-      return "gemini-2.0-flash-preview-image-generation";
+      return "gemini-2.5-flash-image";
     }
 
     return config.models[0] ?? "gemini-2.5-flash";
@@ -123,11 +117,9 @@ export function getPreferredModel(kind: "chat" | "multimodal" | "embedding" | "s
       ? process.env.OPENROUTER_MULTIMODAL_MODEL || process.env.OPENAI_MULTIMODAL_MODEL
       : kind === "embedding"
         ? process.env.OPENROUTER_EMBEDDING_MODEL || process.env.OPENAI_EMBEDDING_MODEL
-        : kind === "speech"
-          ? process.env.OPENROUTER_SPEECH_MODEL || process.env.OPENAI_SPEECH_MODEL
-          : kind === "image"
-            ? process.env.OPENROUTER_IMAGE_MODEL || process.env.OPENAI_IMAGE_MODEL
-            : undefined;
+        : kind === "image"
+          ? process.env.OPENROUTER_IMAGE_MODEL || process.env.OPENAI_IMAGE_MODEL
+          : undefined;
 
   if (envModel?.trim()) {
     return envModel.trim();
@@ -135,10 +127,6 @@ export function getPreferredModel(kind: "chat" | "multimodal" | "embedding" | "s
 
   if (kind === "embedding") {
     return config.provider === "openrouter" ? "openai/text-embedding-3-small" : "text-embedding-3-small";
-  }
-
-  if (kind === "speech") {
-    return config.provider === "openrouter" ? "openai/gpt-4o-mini-tts" : "gpt-4o-mini-tts";
   }
 
   if (kind === "image") {
@@ -206,20 +194,6 @@ function toVertexPart(item: unknown): Record<string, unknown>[] {
       if (parsed) {
         return [{ inlineData: { mimeType: parsed.mimeType, data: parsed.data } }];
       }
-    }
-  }
-
-  if (type === "input_audio") {
-    const inputAudio = record.input_audio as { data?: string; format?: string } | undefined;
-    if (typeof inputAudio?.data === "string") {
-      return [
-        {
-          inlineData: {
-            mimeType: `audio/${inputAudio.format || "wav"}`,
-            data: inputAudio.data
-          }
-        }
-      ];
     }
   }
 
@@ -430,6 +404,7 @@ export async function callJsonChatCompletion(params: {
   model: string;
   messages: Array<Record<string, unknown>>;
   temperature?: number;
+  schema?: JsonSchema;
 }): Promise<string> {
   const config = getLlmConfig();
   if (!config) {
@@ -455,7 +430,12 @@ export async function callJsonChatCompletion(params: {
           : {}),
         generationConfig: {
           temperature: params.temperature ?? 0.2,
-          responseMimeType: "application/json"
+          responseMimeType: "application/json",
+          ...(params.schema
+            ? {
+                responseSchema: toVertexSchema(params.schema)
+              }
+            : {})
         }
       })
     });

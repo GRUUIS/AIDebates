@@ -5,11 +5,9 @@ interface MessageCardProps {
   agent?: AgentProfile;
   citedEvidence?: EvidenceCard[];
   onEvidenceClick?: (evidenceId: string) => void;
-  onPlayAudio?: (message: DebateMessage) => void;
   selectedEvidenceId?: string | null;
   isStreaming?: boolean;
   isFocused?: boolean;
-  isAudioLoading?: boolean;
   replyTarget?: DebateMessage;
 }
 
@@ -29,11 +27,9 @@ export function MessageCard({
   agent,
   citedEvidence = [],
   onEvidenceClick,
-  onPlayAudio,
   selectedEvidenceId,
   isStreaming,
   isFocused,
-  isAudioLoading,
   replyTarget
 }: MessageCardProps) {
   const accent = message.role === "user" ? "#0f172a" : agent?.color ?? "#0f766e";
@@ -58,11 +54,6 @@ export function MessageCard({
             {replyTarget ? <span className="message-reply-v2">Replying to {replyTarget.speaker}</span> : null}
           </div>
         </div>
-        {message.role !== "user" && onPlayAudio ? (
-          <button className="ghost ghost-v2 audio-button-v2" type="button" onClick={() => onPlayAudio(message)} disabled={isAudioLoading || isStreaming}>
-            {isAudioLoading ? "Rendering voice..." : "Play voice"}
-          </button>
-        ) : null}
       </div>
       <p className="message-text-v2">{message.content || (isStreaming ? " " : "")}</p>
       {isStreaming ? (

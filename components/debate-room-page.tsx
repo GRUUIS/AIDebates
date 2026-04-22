@@ -77,12 +77,6 @@ function buildImagePrompt(session: DebateSession): string {
   return `Create a clean editorial illustration for the debate \"${session.title}\". Topic: ${session.topic}. Framing: ${session.framing}. Recent exchange: ${lastMessages}`;
 }
 
-function formatSeconds(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
 export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
   const router = useRouter();
   const [session, setSession] = useState<DebateSession | null>(null);
@@ -98,22 +92,11 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [activeSidebarPanel, setActiveSidebarPanel] = useState<SidebarPanel>("evidence");
   const [uploading, setUploading] = useState(false);
-  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [generatingImage, setGeneratingImage] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [keepRecordingAsEvidence, setKeepRecordingAsEvidence] = useState(true);
-  const [recordingSupported, setRecordingSupported] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messageViewportRef = useRef<HTMLDivElement | null>(null);
   const streamingMessageIdRef = useRef<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
-  const recordingTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const loaded = getSession(sessionId);
@@ -125,8 +108,6 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
     if (typeof window === "undefined") {
       return;
     }
-
-    setRecordingSupported(typeof window.MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia);
 
     const mediaQuery = window.matchMedia(MOBILE_WIDTH_QUERY);
     const applyMatch = () => setIsMobileViewport(mediaQuery.matches);
@@ -140,39 +121,6 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
       setIsEvidenceDrawerOpen(false);
     }
   }, [isMobileViewport]);
-
-  useEffect(() => {
-    if (!isRecording) {
-      if (recordingTimerRef.current) {
-        window.clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-      return;
-    }
-
-    recordingTimerRef.current = window.setInterval(() => {
-      setRecordingSeconds((current) => current + 1);
-    }, 1000);
-
-    return () => {
-      if (recordingTimerRef.current) {
-        window.clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-    };
-  }, [isRecording]);
-
-  useEffect(() => {
-    return () => {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      mediaRecorderRef.current?.stream.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      if (recordingTimerRef.current) {
-        window.clearInterval(recordingTimerRef.current);
-      }
-    };
-  }, []);
 
   const agentsById = useMemo(() => new Map(defaultAgents.map((agent) => [agent.id, agent])), []);
   const messagesById = useMemo(() => new Map((session?.messages ?? []).map((message) => [message.id, message])), [session]);
@@ -575,134 +523,6 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
     }
   }
 
-  async function transcribeRecordedAudio(blob: Blob) {
-    if (!session) {
-      return;
-    }
-
-    setIsTranscribing(true);
-    setStatus("Transcribing your recording...");
-
-    try {
-      const mimeType = blob.type || "audio/webm";
-      const extension = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : mimeType.includes("wav") ? "wav" : "webm";
-      const file = new File([blob], `voice-note.${extension}`, { type: mimeType });
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const response = await fetch("/api/evidence/analyze", {
-        method: "POST",
-        body: formData
-      });
-      const payload = (await response.json()) as { item?: EvidenceCard; error?: string };
-      if (!response.ok || !payload.item) {
-        throw new Error(payload.error || "Audio transcription failed.");
-      }
-
-      const transcriptText = payload.item.transcript?.trim() || payload.item.summary.trim();
-      setInput((current) => (current.trim() ? `${current.trim()}\n\n${transcriptText}` : transcriptText));
-
-      if (keepRecordingAsEvidence) {
-        commitSession((current) => ({ ...current, evidence: mergeEvidenceCards(current.evidence, [payload.item!]) }));
-        setSelectedEvidenceId(payload.item.id);
-        setEvidenceFilter("active");
-        setStatus("Transcribed your recording and added it as audio evidence.");
-      } else {
-        setStatus("Transcribed your recording into the input box.");
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Audio transcription failed.");
-    } finally {
-      setIsTranscribing(false);
-    }
-  }
-
-  async function handleToggleRecording() {
-    if (!recordingSupported) {
-      setStatus("This browser does not support in-browser recording.");
-      return;
-    }
-
-    if (isTranscribing || loading || uploading) {
-      return;
-    }
-
-    if (isRecording) {
-      mediaRecorderRef.current?.stop();
-      setIsRecording(false);
-      setStatus("Finishing recording...");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
-      recordedChunksRef.current = [];
-      setRecordingSeconds(0);
-
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-
-      recorder.addEventListener("dataavailable", (event) => {
-        if (event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
-        }
-      });
-
-      recorder.addEventListener("stop", async () => {
-        const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        recordedChunksRef.current = [];
-        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-        mediaRecorderRef.current = null;
-
-        if (blob.size < 512) {
-          setStatus("The recording was too short to transcribe.");
-          return;
-        }
-
-        await transcribeRecordedAudio(blob);
-      });
-
-      recorder.start();
-      setIsRecording(true);
-      setStatus("Recording from your microphone...");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Microphone access failed.");
-    }
-  }
-
-  async function handlePlayAudio(message: DebateMessage) {
-    if (message.role === "user") {
-      return;
-    }
-
-    setSpeakingMessageId(message.id);
-    try {
-      const response = await fetch("/api/speech", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ text: message.content, speakerId: message.speakerId })
-      });
-      const payload = (await response.json()) as { audioDataUrl?: string; error?: string; selectedVoice?: string };
-      if (!response.ok || !payload.audioDataUrl) {
-        throw new Error(payload.error || "Speech generation failed.");
-      }
-
-      audioRef.current?.pause();
-      const audio = new Audio(payload.audioDataUrl);
-      audioRef.current = audio;
-      await audio.play();
-      setStatus(`Playing ${message.speaker}'s response with ${payload.selectedVoice ?? "a configured voice"}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Speech generation failed.");
-    } finally {
-      setSpeakingMessageId(null);
-    }
-  }
-
   async function handleGenerateImage() {
     if (!session) {
       return;
@@ -946,12 +766,10 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                       agent={agent}
                       citedEvidence={(session.messageEvidenceMap[message.id] ?? []).map((id) => activeEvidenceById.get(id)).filter(Boolean) as EvidenceCard[]}
                       onEvidenceClick={handleSelectEvidence}
-                      onPlayAudio={handlePlayAudio}
                       replyTarget={message.replyToMessageId ? messagesById.get(message.replyToMessageId) : undefined}
                       selectedEvidenceId={selectedEvidenceId}
                       isStreaming={message.id === streamingMessageId}
                       isFocused={isFocused}
-                      isAudioLoading={speakingMessageId === message.id}
                     />
                   );
                 })}
@@ -967,7 +785,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
-                placeholder="Ask the room a question, paste article/PDF links, speak into the mic, and press Enter to send."
+                placeholder="Ask the room a question, paste article or PDF links, and press Enter to send."
               />
               <div className="composer-toolbar-v2 composer-toolbar-v3">
                 <div className="composer-tools-v2">
@@ -979,32 +797,22 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                     />
                     <span>Web search</span>
                   </label>
-                  <button className={`ghost ghost-v2 mic-button-v2${isRecording ? " live" : ""}`} type="button" onClick={handleToggleRecording} disabled={!recordingSupported || isTranscribing || loading || uploading}>
-                    {isRecording ? `Stop recording ${formatSeconds(recordingSeconds)}` : isTranscribing ? "Transcribing..." : "Record voice"}
-                  </button>
-                  <button className="ghost ghost-v2" type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading || loading || isTranscribing}>
+                  <button className="ghost ghost-v2" type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading || loading}>
                     {uploading ? "Analyzing upload..." : "Upload evidence"}
                   </button>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/*,application/pdf,audio/*"
+                    accept="image/*,application/pdf"
                     multiple
                     hidden
                     onChange={(event) => void handleUploadFiles(event.target.files)}
                   />
                 </div>
                 <span className="composer-hint-v2">{debateModeMeta[session.mode].description}</span>
-                <button className="cta cta-v2" type="button" onClick={handleSend} disabled={loading || uploading || isTranscribing}>
+                <button className="cta cta-v2" type="button" onClick={handleSend} disabled={loading || uploading}>
                   {loading ? "Working..." : "Send"}
                 </button>
-              </div>
-              <div className="composer-voice-row-v2">
-                <label className={`toggle-pill-v2${keepRecordingAsEvidence ? " active" : ""}`}>
-                  <input type="checkbox" checked={keepRecordingAsEvidence} onChange={(event) => setKeepRecordingAsEvidence(event.target.checked)} />
-                  <span>Keep recording as evidence</span>
-                </label>
-                {!recordingSupported ? <span className="composer-hint-v2">This browser cannot record audio directly.</span> : null}
               </div>
               {detectedUrls.length > 0 ? (
                 <div className="detected-links-v2">
@@ -1043,7 +851,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                   </button>
                 ) : null}
               </div>
-              <p className="evidence-note-v2">Inspect, prune, and validate the sources feeding the current turn, including uploaded image, PDF, and audio evidence.</p>
+              <p className="evidence-note-v2">Inspect, prune, and validate the sources feeding the current turn, including uploaded image and PDF evidence.</p>
               <div className="evidence-tabs-v2">
                 <button className={`tab-v2${evidenceFilter === "used" ? " active" : ""}`} type="button" onClick={() => setEvidenceFilter("used")}>
                   Used this turn
@@ -1075,7 +883,7 @@ export default function DebateRoomPage({ sessionId }: DebateRoomPageProps) {
                         ? "When the model grounds a reply in active sources, they will appear here first."
                         : evidenceFilter === "removed"
                           ? "Removed sources stay here temporarily so you can undo mistakes."
-                          : "Paste a webpage or PDF URL into the message box, upload local evidence, or record audio into the composer."}
+                          : "Paste a webpage or PDF URL into the message box, or upload local image and PDF evidence."}
                     </p>
                   </div>
                 )}

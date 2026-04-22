@@ -32,7 +32,6 @@ export function EvidenceSourceCard({ evidence, isHighlighted, isUsedThisTurn, on
           ))}
         </div>
       ) : null}
-      {evidence.transcript ? <p className="source-detail-v2"><strong>Transcript:</strong> {evidence.transcript.slice(0, 220)}{evidence.transcript.length > 220 ? "..." : ""}</p> : null}
       {evidence.ocrText ? <p className="source-detail-v2"><strong>OCR:</strong> {evidence.ocrText.slice(0, 180)}{evidence.ocrText.length > 180 ? "..." : ""}</p> : null}
       <p className="source-domain-v2">{evidence.domain}</p>
       <div className="source-actions-v2">

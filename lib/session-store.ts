@@ -152,8 +152,7 @@ export function createSession(input: CreateSessionInput): DebateSession {
     settings: {
       enableSearch: input.enableSearch ?? true,
       maxActiveEvidence: 8,
-      juryEnabled: input.mode === "jury",
-      autoSpeakResponses: false
+      juryEnabled: input.mode === "jury"
     },
     agentStateMap: buildAgentStateMap(agents),
     userIntentState: {

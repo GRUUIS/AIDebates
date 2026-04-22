@@ -214,8 +214,7 @@ function ensureSessionDefaults(session: DebateSession): DebateSession {
     userIntentState: session.userIntentState ?? { currentQuestion: session.topic, unansweredPoints: [] },
     conversationFocus: session.conversationFocus ?? session.topic,
     settings: {
-      ...session.settings,
-      autoSpeakResponses: session.settings.autoSpeakResponses ?? false
+      ...session.settings
     }
   };
 }

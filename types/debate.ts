@@ -1,6 +1,6 @@
 ﻿export type AgentRole = "moderator" | "debater" | "user";
 export type DebateIntent = "answer_user" | "rebut" | "support" | "clarify" | "question" | "synthesize";
-export type RawInputType = "url" | "image" | "pdf" | "audio";
+export type RawInputType = "url" | "image" | "pdf";
 
 export type MoralLens =
   | "Utilitarian"
@@ -13,8 +13,8 @@ export type MoralLens =
   | "Arcane Lifter";
 
 export type DebateMode = "classic" | "jury" | "networked_judge" | "stance_shift" | "postmortem" | "human_vs_ai";
-export type EvidenceType = "paper" | "article" | "case-study" | "video" | "image" | "audio";
-export type EvidenceSourceKind = "search" | "user-url" | "user-pdf" | "user-image" | "user-audio";
+export type EvidenceType = "paper" | "article" | "case-study" | "video" | "image";
+export type EvidenceSourceKind = "search" | "user-url" | "user-pdf" | "user-image";
 export type EvidenceCredibility = "high" | "medium" | "low";
 export type EvidenceRetrievalStatus = "ok" | "partial" | "failed";
 
@@ -43,7 +43,6 @@ export interface EvidenceCard {
   credibility: EvidenceCredibility;
   retrievalStatus: EvidenceRetrievalStatus;
   usedBy: string;
-  transcript?: string;
   ocrText?: string;
   claims?: string[];
   sourceMeta?: Record<string, string | number | boolean>;
@@ -67,7 +66,6 @@ export interface SessionSettings {
   selectedModel?: string;
   maxActiveEvidence?: number;
   juryEnabled?: boolean;
-  autoSpeakResponses?: boolean;
 }
 
 export interface AgentState {

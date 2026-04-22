@@ -1,10 +1,44 @@
-﻿import { getLlmConfig, getPreferredModel } from "@/lib/llm";
+import { getLlmConfig, getPreferredModel } from "@/lib/llm";
 
 interface ImageBody {
   prompt?: string;
 }
 
-function extractImageData(payload: unknown): { b64?: string; mimeType?: string } | null {
+interface VertexImageGenerateResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{
+        text?: string;
+        inlineData?: {
+          mimeType?: string;
+          data?: string;
+        };
+      }>;
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+}
+
+function buildVertexImageUrl(model: string, apiKey: string): string {
+  return `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+}
+
+function extractVertexImage(payload: VertexImageGenerateResponse): { b64?: string; mimeType?: string } | null {
+  const parts = payload.candidates?.[0]?.content?.parts ?? [];
+  const imagePart = parts.find((part) => part.inlineData?.data);
+  if (!imagePart?.inlineData?.data) {
+    return null;
+  }
+
+  return {
+    b64: imagePart.inlineData.data,
+    mimeType: imagePart.inlineData.mimeType || "image/png"
+  };
+}
+
+function extractOpenAiStyleImage(payload: unknown): { b64?: string; mimeType?: string } | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -45,6 +79,50 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (config.provider === "vertex") {
+      const response = await fetch(buildVertexImageUrl(getPreferredModel("image"), config.apiKey), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: [
+                    "Generate a single clean editorial illustration.",
+                    "Avoid text overlays unless the prompt explicitly asks for typography.",
+                    "Return an image, not a textual explanation.",
+                    `Prompt: ${prompt}`
+                  ].join("\n")
+                }
+              ]
+            }
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"]
+          }
+        })
+      });
+
+      const payload = (await response.json().catch(() => null)) as VertexImageGenerateResponse | null;
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || `Image generation failed with status ${response.status}.`);
+      }
+
+      const image = payload ? extractVertexImage(payload) : null;
+      if (!image?.b64) {
+        throw new Error("No image payload was returned by Vertex.");
+      }
+
+      return Response.json({
+        dataUrl: `data:${image.mimeType || "image/png"};base64,${image.b64}`,
+        mimeType: image.mimeType || "image/png"
+      });
+    }
+
     const response = await fetch(`${config.baseURL ?? "https://api.openai.com/v1"}/images/generations`, {
       method: "POST",
       headers: {
@@ -64,7 +142,7 @@ export async function POST(request: Request) {
     }
 
     const payload = await response.json();
-    const image = extractImageData(payload);
+    const image = extractOpenAiStyleImage(payload);
     if (!image?.b64) {
       throw new Error("No image payload was returned by the model.");
     }
@@ -82,4 +160,3 @@ export async function POST(request: Request) {
     );
   }
 }
-

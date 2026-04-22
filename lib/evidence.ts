@@ -16,10 +16,28 @@ interface MultimodalExtraction {
   summary: string;
   excerpt: string;
   claims: string[];
-  transcript?: string;
   ocrText?: string;
   sourceMeta?: Record<string, string | number | boolean>;
 }
+
+const multimodalExtractionSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    title: { type: "string" },
+    summary: { type: "string" },
+    excerpt: { type: "string" },
+    claims: { type: "array", items: { type: "string" } },
+    ocrText: { type: "string" },
+    sourceMeta: {
+      type: "object",
+      additionalProperties: {
+        anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }]
+      }
+    }
+  },
+  required: ["title", "summary", "excerpt", "claims"]
+} as const;
 
 const MAX_SUMMARY_CHARS = 280;
 const MAX_EXCERPT_CHARS = 360;
@@ -88,10 +106,6 @@ function detectSourceType(url: string, title?: string): EvidenceType {
 
   if (lower.includes("image") || /\.(png|jpg|jpeg|webp|gif)$/i.test(lower)) {
     return "image";
-  }
-
-  if (/\.(mp3|wav|m4a|ogg|webm)$/i.test(lower) || lower.includes("audio")) {
-    return "audio";
   }
 
   return "article";
@@ -216,7 +230,6 @@ function buildCard(params: {
   excerpt: string;
   retrievalStatus: EvidenceCard["retrievalStatus"];
   usedBy?: string;
-  transcript?: string;
   ocrText?: string;
   claims?: string[];
   sourceMeta?: Record<string, string | number | boolean>;
@@ -235,7 +248,6 @@ function buildCard(params: {
     credibility: credibilityFrom(normalizedUrl, params.retrievalStatus),
     retrievalStatus: params.retrievalStatus,
     usedBy: params.usedBy ?? "Grounding",
-    transcript: params.transcript,
     ocrText: params.ocrText,
     claims: params.claims?.slice(0, 5),
     sourceMeta: params.sourceMeta
@@ -251,18 +263,15 @@ function toDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function toBase64(buffer: Buffer): string {
-  return buffer.toString("base64");
-}
-
 async function analyzeWithModel(messages: Array<Record<string, unknown>>): Promise<MultimodalExtraction | null> {
   try {
     const raw = await callJsonChatCompletion({
       model: getPreferredModel("multimodal"),
-      messages
+      messages,
+      schema: multimodalExtractionSchema
     });
     const parsed = JSON.parse(raw) as Partial<MultimodalExtraction>;
-    if (!parsed.summary && !parsed.excerpt && !parsed.transcript) {
+    if (!parsed.summary && !parsed.excerpt) {
       return null;
     }
     return {
@@ -270,7 +279,6 @@ async function analyzeWithModel(messages: Array<Record<string, unknown>>): Promi
       summary: parsed.summary?.trim() || parsed.excerpt?.trim() || "Model extracted limited context.",
       excerpt: parsed.excerpt?.trim() || parsed.summary?.trim() || "",
       claims: (parsed.claims ?? []).map((item) => item.trim()).filter(Boolean).slice(0, 5),
-      transcript: parsed.transcript?.trim(),
       ocrText: parsed.ocrText?.trim(),
       sourceMeta: parsed.sourceMeta
     };
@@ -344,33 +352,6 @@ async function analyzePdfUpload(buffer: Buffer, fileName: string): Promise<Multi
       excerpt,
       claims: [],
       sourceMeta: { fallback: true }
-    }
-  );
-}
-
-async function analyzeAudioUpload(buffer: Buffer, mimeType: string, fileName: string): Promise<MultimodalExtraction> {
-  const format = mimeType.split("/")[1]?.replace("x-", "") || "mp3";
-  const extraction = await analyzeWithModel([
-    {
-      role: "system",
-      content: "You transcribe and summarize uploaded audio for an ethics debate. Return JSON with title, summary, excerpt, transcript, claims, and sourceMeta."
-    },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Transcribe this audio, summarize the speaker's position, and extract 2-5 concise claims that can be cited in a debate." },
-        { type: "input_audio", input_audio: { data: toBase64(buffer), format } }
-      ]
-    }
-  ]);
-
-  return (
-    extraction ?? {
-      title: fileName,
-      summary: `Uploaded audio \"${fileName}\" was added as evidence, but transcription was unavailable.`,
-      excerpt: "Audio evidence uploaded without reliable transcription.",
-      claims: [],
-      sourceMeta: { mimeType }
     }
   );
 }
@@ -478,25 +459,6 @@ export async function analyzeUploadedEvidence(file: File): Promise<EvidenceCard>
     );
   }
 
-  if (lower.startsWith("audio/")) {
-    const extraction = await analyzeAudioUpload(buffer, mimeType, file.name);
-    return indexCard(
-      buildCard({
-        title: extraction.title || file.name,
-        url: buildUploadUrl("audio", file.name),
-        type: "audio",
-        sourceKind: "user-audio",
-        rawInputType: "audio",
-        summary: extraction.summary,
-        excerpt: extraction.excerpt,
-        retrievalStatus: extraction.transcript ? "ok" : "partial",
-        transcript: extraction.transcript,
-        claims: extraction.claims,
-        sourceMeta: { fileName: file.name, mimeType, ...(extraction.sourceMeta ?? {}) }
-      })
-    );
-  }
-
   throw new Error(`Unsupported file type: ${mimeType || file.name}`);
 }
 
@@ -532,7 +494,6 @@ export function mergeEvidence(...groups: EvidenceCard[][]): EvidenceCard[] {
           id: buildEvidenceId(key),
           usedBy: existing.usedBy === item.usedBy ? item.usedBy : `${existing.usedBy}, ${item.usedBy}`,
           claims: item.claims?.length ? item.claims : existing.claims,
-          transcript: item.transcript ?? existing.transcript,
           ocrText: item.ocrText ?? existing.ocrText,
           sourceMeta: { ...(existing.sourceMeta ?? {}), ...(item.sourceMeta ?? {}) }
         });

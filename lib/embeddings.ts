@@ -102,7 +102,6 @@ export async function indexEvidenceCard(card: EvidenceCard): Promise<void> {
     card.summary,
     card.excerpt,
     ...(card.claims ?? []),
-    card.transcript ?? "",
     card.ocrText ?? ""
   ].join(" "));
 

@@ -33,6 +33,8 @@ VERTEX_MODEL=gemini-2.5-flash
 VERTEX_FALLBACK_MODELS=gemini-2.5-pro
 VERTEX_MULTIMODAL_MODEL=gemini-2.5-flash
 VERTEX_EMBEDDING_MODEL=gemini-embedding-001
+# Optional:
+# VERTEX_IMAGE_MODEL=gemini-2.5-flash-image
 SEARCH_API_KEY=your_tavily_api_key_here
 ```
 
@@ -75,6 +77,11 @@ npm run build
 - Debate room prototype
 - Mock debate flow
 - Vertex-backed `/api/debate` route with mock fallback
+- Vertex-backed `/api/image/generate` route
+- Tavily-backed evidence search plus URL/PDF/image evidence ingestion
+- Embedding-based evidence ranking and claim similarity
+- Jury, judge, stance-shift, and postmortem debate modes
+- TTS/STT work has been deferred and is not included in the current shipped feature set
 - Local project-specific skill drafts
 
 ## Notes
