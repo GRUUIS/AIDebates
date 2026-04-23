@@ -288,10 +288,14 @@ function shouldStopForHumanTurn(session: DebateSession): boolean {
 }
 
 async function resolveEvidence(session: DebateSession, userMessage?: string): Promise<{ mergedEvidence: EvidenceCard[]; liveEvidence: EvidenceCard[] }> {
-  const importedFromMessage = await Promise.all((userMessage?.match(/https?:\/\/\S+/g) ?? []).map((url) => importEvidenceFromUrl(url.replace(/[),.;]+$/, ""))));
+  const urlsInMessage = userMessage?.match(/https?:\/\/\S+/g) ?? [];
+  const importedFromMessage = await Promise.all(urlsInMessage.map((url) => importEvidenceFromUrl(url.replace(/[),.;]+$/, ""))));
 
+  // Only skip Tavily search if message contains multiple URLs to avoid duplicate processing
+  // Single URL + text queries should still search for additional context
+  const hasMultipleUrls = urlsInMessage.length > 1;
   let liveEvidence: EvidenceCard[] = [];
-  if (session.settings.enableSearch && userMessage?.trim()) {
+  if (session.settings.enableSearch && userMessage?.trim() && !hasMultipleUrls) {
     try {
       liveEvidence = await searchEvidence(userMessage, session.topic);
     } catch {

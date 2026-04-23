@@ -388,19 +388,32 @@ export async function importEvidenceFromUrl(url: string, sourceKind: EvidenceSou
     const excerpt = truncate(article.text, MAX_EXCERPT_CHARS);
     const retrievalStatus = excerpt.length > 120 ? "ok" : "partial";
 
-    return indexCard(
-      buildCard({
-        title: article.title,
-        url: normalizedUrl,
-        type: detectSourceType(normalizedUrl, article.title),
-        sourceKind,
-        rawInputType: "url",
-        summary: excerpt || "A user-provided URL was added but the page text was limited.",
-        excerpt,
-        retrievalStatus,
-        sourceMeta: { contentType }
-      })
-    );
+    // Analyze URL content with Google AI for deeper understanding
+    const analysis = await analyzeWithModel([
+      {
+        role: "system",
+        content: "You analyze web content for an ethics debate. Return JSON with title, summary, excerpt, claims, and optional sourceMeta. Focus on extracting key arguments and citations."
+      },
+      {
+        role: "user",
+        content: `URL: ${normalizedUrl}\n\nTitle: ${article.title}\n\nContent:\n${article.text.slice(0, 12000)}`
+      }
+    ]);
+
+    const finalCard = buildCard({
+      title: analysis?.title || article.title,
+      url: normalizedUrl,
+      type: detectSourceType(normalizedUrl, analysis?.title || article.title),
+      sourceKind,
+      rawInputType: "url",
+      summary: analysis?.summary || excerpt || "A user-provided URL was added but the page text was limited.",
+      excerpt: analysis?.excerpt || excerpt,
+      retrievalStatus,
+      claims: analysis?.claims,
+      sourceMeta: { contentType, ...(analysis?.sourceMeta ?? {}) }
+    });
+
+    return indexCard(finalCard);
   } catch (error) {
     return indexCard(
       buildCard({
