@@ -1,6 +1,6 @@
 # Ethics Arena
 
-A multi-agent AI debate chatroom prototype for moral and ethical dilemmas.
+A "multi-agent" AI debate chatroom prototype for moral and ethical dilemmas.
 
 ## Stack
 
